@@ -1,0 +1,6 @@
+# Claude context (personal, tidak perlu di-track)
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
