@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 
 
 class ChatMessage(BaseModel):
@@ -20,7 +20,31 @@ class ChatRequest(BaseModel):
     strict_mode: bool = True
 
 
+class ToolCallInfo(BaseModel):
+    tool_name: str
+    tool_args: dict
+    description: str  # human-readable summary for UI
+
+
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceRef]
     session_id: str
+    status: Literal["done", "pending_tool_approval"] = "done"
+    pending_tool: Optional[ToolCallInfo] = None
+    thread_id: Optional[str] = None
+
+
+class ToolApprovalRequest(BaseModel):
+    thread_id: str
+    session_id: str
+    approved: bool
+
+
+class ToolApprovalResponse(BaseModel):
+    answer: str
+    sources: list[SourceRef]
+    session_id: str
+    status: Literal["done", "pending_tool_approval"] = "done"
+    pending_tool: Optional[ToolCallInfo] = None
+    thread_id: Optional[str] = None

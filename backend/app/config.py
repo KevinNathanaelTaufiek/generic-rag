@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     top_k_results: int = 5
     chunk_size: int = 500
     chunk_overlap: int = 50
+    dummy_services_base_url: str = "http://localhost:8001"
 
 
 settings = Settings()
