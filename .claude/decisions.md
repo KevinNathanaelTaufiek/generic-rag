@@ -67,3 +67,21 @@ Dokumen ini mencatat keputusan arsitektur beserta alasannya.
 - Memungkinkan `DELETE /knowledge/{doc_id}` menghapus semua chunk terkait
 - Memungkinkan list documents dengan `chunk_count` per dokumen
 - `doc_id` juga dipakai sebagai referensi di chat sources
+
+---
+
+## ADR-005 — MemorySaver untuk interrupt state (2026-03-20)
+
+**Decision:** Gunakan `MemorySaver` (in-memory) dari LangGraph untuk menyimpan graph state saat interrupt.
+
+**Reasoning:** `thread_id` hanya hidup selama satu approval cycle (beberapa detik antara `/chat` dan `/chat/tool-approval`). Tidak perlu database persisten untuk ini di MVP.
+
+**Trade-off:** Pending approval hilang jika backend restart. Frontend handle HTTP 400 dan inform user untuk kirim ulang. Jika persistence diperlukan di masa depan, ganti `MemorySaver` dengan `SqliteSaver` atau `PostgresSaver` — tidak ada perubahan logika lain.
+
+## ADR-006 — Dummy microservices sebagai app terpisah (2026-03-20)
+
+**Decision:** Dummy services di-deploy sebagai FastAPI app terpisah di `dummy_services/` (port 8001), bukan endpoint di backend utama.
+
+**Reasoning:** Mensimulasikan deployment separation yang nyata. Saat microservices asli bisa diakses, cukup ganti `DUMMY_SERVICES_BASE_URL` di `backend/.env`.
+
+**Migration:** `DUMMY_SERVICES_BASE_URL=https://real-service.internal` di `backend/.env`.
