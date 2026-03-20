@@ -24,6 +24,11 @@ class CRUDDataInput(BaseModel):
     data: dict = {}
 
 
+class GetRandomNumberInput(BaseModel):
+    min: int = 1
+    max: int = 100
+
+
 # --- Async executor functions ---
 
 async def search_web_executor(query: str) -> str:
@@ -70,6 +75,24 @@ async def send_notification_executor(to: str, message: str) -> str:
         return f"Error: Notification failed — {str(e)}"
 
 
+async def get_random_number_executor(min: int = 1, max: int = 100) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.dummy_services_base_url}/random-number",
+                json={"min": min, "max": max},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return f"Random number between {data['min']} and {data['max']}: {data['number']}"
+    except httpx.TimeoutException:
+        return "Error: Random number service timed out."
+    except httpx.HTTPStatusError as e:
+        return f"Error: Random number service returned HTTP {e.response.status_code}."
+    except Exception as e:
+        return f"Error: Failed to get random number — {str(e)}"
+
+
 async def crud_data_executor(action: str, resource: str, data: dict) -> str:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -109,6 +132,15 @@ TOOLS: list[StructuredTool] = [
         description="Send a notification or message to a recipient.",
         args_schema=SendNotificationInput,
         coroutine=send_notification_executor,
+    ),
+    StructuredTool(
+        name="get_random_number",
+        description=(
+            "Generate a random number between min and max (inclusive). "
+            "Default range is 1 to 100."
+        ),
+        args_schema=GetRandomNumberInput,
+        coroutine=get_random_number_executor,
     ),
     StructuredTool(
         name="crud_data",

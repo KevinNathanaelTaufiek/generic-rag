@@ -44,6 +44,8 @@ def _build_description(tool_name: str, tool_args: dict) -> str:
         return f"Sending notification to '{tool_args.get('to', '')}': {tool_args.get('message', '')}"
     if tool_name == "crud_data":
         return f"Performing '{tool_args.get('action', '')}' on resource '{tool_args.get('resource', '')}'"
+    if tool_name == "get_random_number":
+        return f"Generating random number between {tool_args.get('min', 1)} and {tool_args.get('max', 100)}"
     return f"Calling {tool_name} with args {tool_args}"
 
 
