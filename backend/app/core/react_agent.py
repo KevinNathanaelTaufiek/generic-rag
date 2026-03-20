@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated, Any
 
 from typing_extensions import TypedDict
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
@@ -20,6 +20,21 @@ class AgentState(TypedDict):
 
 # Shared MemorySaver — persists for the process lifetime (in-memory, MVP only)
 _memory = MemorySaver()
+
+
+def _extract_text(content) -> str:
+    """Extract plain string from LangChain message content (handles Gemini list format)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+        return "".join(parts)
+    return str(content)
 
 
 def _build_description(tool_name: str, tool_args: dict) -> str:
@@ -106,7 +121,14 @@ async def run_agent(message: str, history: list[dict], session_id: str) -> dict[
     - pending_tool: ToolCallInfo | None
     - session_id: str
     """
-    messages = []
+    messages = [
+        SystemMessage(content=(
+            "You are a helpful assistant with access to tools. "
+            "When a tool returns results, use those results directly to answer the user — "
+            "even if the data looks like placeholder or demo content. "
+            "Do not say you cannot answer if tool results are available."
+        ))
+    ]
     for turn in history:
         if turn.get("role") == "user":
             messages.append(HumanMessage(content=turn["content"]))
@@ -150,7 +172,7 @@ async def run_agent(message: str, history: list[dict], session_id: str) -> dict[
 
     # Completed without interruption
     final_message = result["messages"][-1]
-    answer = final_message.content if hasattr(final_message, "content") else str(final_message)
+    answer = _extract_text(final_message.content) if hasattr(final_message, "content") else str(final_message)
 
     return {
         "status": "done",
@@ -203,7 +225,7 @@ async def resume_agent(thread_id: str, approved: bool, session_id: str) -> dict[
 
     # Completed
     final_message = result["messages"][-1]
-    answer = final_message.content if hasattr(final_message, "content") else str(final_message)
+    answer = _extract_text(final_message.content) if hasattr(final_message, "content") else str(final_message)
 
     return {
         "status": "done",
