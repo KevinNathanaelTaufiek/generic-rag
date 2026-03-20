@@ -1,5 +1,5 @@
-# Claude context (personal, tidak perlu di-track)
-.claude/
+# Claude context
+.claude/settings.local.json
 
 # OS
 .DS_Store

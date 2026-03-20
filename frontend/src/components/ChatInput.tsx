@@ -25,7 +25,7 @@ export default function ChatInput({ onSend, disabled }: Props) {
   return (
     <div className="flex gap-2 border-t border-gray-200 bg-white px-4 py-3">
       <textarea
-        className="flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 min-h-[40px] max-h-32"
+        className="flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 min-h-10 max-h-32"
         rows={1}
         placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
         value={value}
