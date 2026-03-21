@@ -18,6 +18,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     history: Optional[list[ChatMessage]] = None
     strict_mode: bool = True
+    enabled_tools: Optional[list[str]] = None  # None = all tools enabled
 
 
 class ToolCallInfo(BaseModel):

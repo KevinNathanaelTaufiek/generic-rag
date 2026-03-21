@@ -5,6 +5,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from app.config import settings
+from app.core.vectorstore import get_vectorstore
 
 
 # --- Input schemas ---
@@ -29,7 +30,29 @@ class GetRandomNumberInput(BaseModel):
     max: int = 100
 
 
+class SearchKnowledgeInput(BaseModel):
+    query: str
+
+
 # --- Async executor functions ---
+
+async def search_knowledge_executor(query: str) -> str:
+    try:
+        vectorstore = get_vectorstore()
+        results = vectorstore.similarity_search_with_relevance_scores(query, k=settings.top_k_results)
+        relevant = [(doc, score) for doc, score in results if score >= 0.5]
+        if not relevant:
+            return "No relevant information found in the knowledge base."
+        parts = []
+        for doc, score in relevant:
+            meta = doc.metadata
+            title = meta.get("title", "Unknown")
+            doc_id = meta.get("doc_id", "")
+            parts.append(f"[source: {title} | doc_id: {doc_id} | score: {score:.2f}]\n{doc.page_content}")
+        return "\n\n---\n\n".join(parts)
+    except Exception as e:
+        return f"Error: Knowledge base search failed — {str(e)}"
+
 
 async def search_web_executor(query: str) -> str:
     try:
@@ -116,6 +139,41 @@ async def crud_data_executor(action: str, resource: str, data: dict) -> str:
 # --- Tool registry ---
 # Use coroutine= (not func=) for async tools in StructuredTool.
 # Invoke via: await tool.ainvoke({"param": value})
+
+TOOL_NAMES: list[str] = ["search_web", "send_notification", "get_random_number", "crud_data"]
+
+SEARCH_KNOWLEDGE_TOOL = StructuredTool(
+    name="search_knowledge",
+    description=(
+        "Search the internal knowledge base for information that has been added by the user. "
+        "Always use this tool FIRST before any other tool when answering questions. "
+        "Returns relevant excerpts from stored documents."
+    ),
+    args_schema=SearchKnowledgeInput,
+    coroutine=search_knowledge_executor,
+)
+
+
+def get_tools(enabled: list[str] | None = None) -> list[StructuredTool]:
+    """
+    Return tools based on enabled list sent by frontend.
+
+    Frontend sends the exact list of toggled-on tools (including/excluding "search_knowledge").
+    - None → not specified → default: knowledge only
+    - []   → user disabled all → no tools (LLM answers from general knowledge)
+    - ["search_knowledge", ...] → knowledge first + other enabled tools
+    - ["search_web", ...]       → other tools only, no knowledge
+    """
+    if enabled is None:
+        return [SEARCH_KNOWLEDGE_TOOL]
+
+    result = []
+    if "search_knowledge" in enabled:
+        result.append(SEARCH_KNOWLEDGE_TOOL)
+
+    other = [t for t in TOOLS if t.name in enabled]
+    return result + other
+
 
 TOOLS: list[StructuredTool] = [
     StructuredTool(

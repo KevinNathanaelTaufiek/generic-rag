@@ -1,15 +1,65 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { sendMessage, approveToolCall } from '../api/chat'
 import ChatWindow from '../components/ChatWindow'
 import type { DisplayMessage } from '../components/ChatWindow'
 import ChatInput from '../components/ChatInput'
 
+const ALL_TOOLS = ['search_knowledge', 'search_web', 'send_notification', 'get_random_number', 'crud_data']
+
+const TOOL_LABELS: Record<string, string> = {
+  search_knowledge: 'Knowledge Base',
+  search_web: 'Search Web',
+  send_notification: 'Send Notification',
+  get_random_number: 'Random Number',
+  crud_data: 'CRUD Data',
+}
+
+const TOOL_DESCRIPTIONS: Record<string, string> = {
+  search_knowledge: 'Cari jawaban dari dokumen yang sudah ditambahkan ke knowledge base.',
+  search_web: 'Cari informasi dari internet jika tidak ada di knowledge base.',
+  send_notification: 'Kirim notifikasi atau pesan ke penerima.',
+  get_random_number: 'Generate angka acak dalam rentang tertentu.',
+  crud_data: 'Buat, baca, update, atau hapus data di sistem eksternal.',
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [sessionId, setSessionId] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
-  const [strictMode, setStrictMode] = useState(true)
+  const [strictMode, setStrictMode] = useState(false)
   const [pendingApproval, setPendingApproval] = useState(false)
+  const [enabledTools, setEnabledTools] = useState<string[]>(['search_knowledge'])
+  const [toolsBeforeStrict, setToolsBeforeStrict] = useState<string[]>(['search_knowledge'])
+  const [showToolMenu, setShowToolMenu] = useState(false)
+  const toolMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (toolMenuRef.current && !toolMenuRef.current.contains(e.target as Node)) {
+        setShowToolMenu(false)
+      }
+    }
+    if (showToolMenu) document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showToolMenu])
+
+  function toggleStrictMode() {
+    if (!strictMode) {
+      // Turning ON: save current tools, force knowledge-only
+      setToolsBeforeStrict(enabledTools)
+      setEnabledTools(['search_knowledge'])
+    } else {
+      // Turning OFF: restore previous tools
+      setEnabledTools(toolsBeforeStrict)
+    }
+    setStrictMode(prev => !prev)
+  }
+
+  function toggleTool(name: string) {
+    setEnabledTools(prev =>
+      prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]
+    )
+  }
 
   async function handleSend(text: string) {
     const userMsg: DisplayMessage = { role: 'user', content: text }
@@ -26,6 +76,7 @@ export default function ChatPage() {
         session_id: sessionId,
         history,
         strict_mode: strictMode,
+        enabled_tools: enabledTools,
       })
       setSessionId(res.session_id)
 
@@ -154,11 +205,61 @@ export default function ChatPage() {
                 ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
                 : 'bg-gray-50 border-gray-200 text-gray-500'
             }`}
-            onClick={() => setStrictMode(prev => !prev)}
-            title={strictMode ? 'Strict: hanya jawab dari knowledge base' : 'Bebas: boleh jawab dari general knowledge'}
+            onClick={toggleStrictMode}
+            title={strictMode
+              ? 'Strict mode ON: hanya menjawab dari knowledge base. Klik untuk menonaktifkan.'
+              : 'Strict mode OFF: LLM boleh menggunakan general knowledge. Klik untuk mengaktifkan dan membatasi jawaban hanya dari knowledge base.'}
           >
             {strictMode ? '🔒 Strict' : '💬 Bebas'}
           </button>
+          <div className="relative" ref={toolMenuRef}>
+            <button
+              className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
+                enabledTools.length === 0
+                  ? 'bg-red-50 border-red-200 text-red-500'
+                  : enabledTools.length < ALL_TOOLS.length
+                  ? 'bg-amber-50 border-amber-300 text-amber-700'
+                  : 'bg-gray-50 border-gray-200 text-gray-600'
+              }`}
+              onClick={() => setShowToolMenu(prev => !prev)}
+              title="Toggle active tools"
+            >
+              Tools {enabledTools.length}/{ALL_TOOLS.length}
+            </button>
+            {showToolMenu && (
+              <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-44">
+                <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Active Tools</span>
+                  <button
+                    className="text-xs text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                    onClick={() => setEnabledTools(enabledTools.length === ALL_TOOLS.length ? [] : [...ALL_TOOLS])}
+                  >
+                    {enabledTools.length === ALL_TOOLS.length ? 'Disable all' : 'Enable all'}
+                  </button>
+                </div>
+                {ALL_TOOLS.map(name => {
+                  const locked = strictMode && name === 'search_knowledge'
+                  const disabledByStrict = strictMode && name !== 'search_knowledge'
+                  return (
+                    <label
+                      key={name}
+                      className={`flex items-center gap-2 px-3 py-2 ${disabledByStrict || locked ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50 cursor-pointer'}`}
+                      title={disabledByStrict ? 'Nonaktifkan strict mode untuk mengaktifkan tool ini.' : locked ? 'Terkunci saat strict mode aktif.' : TOOL_DESCRIPTIONS[name]}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabledTools.includes(name)}
+                        onChange={() => toggleTool(name)}
+                        disabled={strictMode}
+                        className="accent-indigo-600"
+                      />
+                      <span className="text-sm text-gray-700">{TOOL_LABELS[name]}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
           {messages.length > 0 && (
             <button
               className="text-sm text-gray-400 hover:text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 cursor-pointer"

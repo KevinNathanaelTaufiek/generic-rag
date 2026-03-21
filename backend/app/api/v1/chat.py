@@ -20,6 +20,8 @@ async def chat(body: ChatRequest):
         message=body.message,
         history=history,
         session_id=session_id,
+        enabled_tools=body.enabled_tools,
+        strict_mode=body.strict_mode,
     )
 
     sources = [SourceRef(**s) for s in result.get("sources", [])]

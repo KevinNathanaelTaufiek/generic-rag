@@ -22,6 +22,7 @@ export interface ChatRequest {
   session_id?: string
   history?: ChatMessage[]
   strict_mode?: boolean
+  enabled_tools?: string[]
 }
 
 export interface ChatResponse {
