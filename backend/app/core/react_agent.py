@@ -1,6 +1,7 @@
 import uuid
 import time
 import logging
+import json
 from typing import Annotated, Any
 
 from typing_extensions import TypedDict
@@ -92,6 +93,23 @@ def _build_system_prompt(enabled_tools: list[str] | None, strict_mode: bool = Fa
     return "You are a helpful assistant. Answer the user's question to the best of your ability."
 
 
+def _extract_sources_from_web_result(result_str: str) -> list[dict]:
+    """Parse sources from search_web tool output (JSON block)."""
+    try:
+        start = result_str.find("[web_sources_json]\n")
+        end = result_str.find("\n[/web_sources_json]")
+        if start == -1 or end == -1:
+            return []
+        json_str = result_str[start + len("[web_sources_json]\n"):end]
+        items = json.loads(json_str)
+        return [
+            {"doc_id": f"web:{i}", "title": r["title"], "excerpt": r["content"][:200], "url": r["url"]}
+            for i, r in enumerate(items)
+        ]
+    except Exception:
+        return []
+
+
 def _extract_sources_from_tool_result(result_str: str) -> list[dict]:
     """Parse sources from search_knowledge tool output."""
     sources = []
@@ -131,6 +149,14 @@ async def agent_node(state: AgentState) -> AgentState:
 
         sources = _extract_sources_from_tool_result(result_str)
         no_results = "[source:" not in result_str
+
+        if no_results and strict_mode:
+            logger.info("[agent] strict mode: no knowledge base results, refusing to answer from general knowledge")
+            return {
+                **state,
+                "messages": [AIMessage(content="Maaf, informasi tersebut tidak ditemukan di knowledge base. Saya tidak dapat menjawab pertanyaan ini berdasarkan sumber yang tersedia.")],
+                "sources": [],
+            }
 
         messages = list(state["messages"])
         if no_results and not strict_mode:
@@ -203,6 +229,8 @@ async def agent_node(state: AgentState) -> AgentState:
         sources = list(state.get("sources") or [])
         if tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
             sources = _extract_sources_from_tool_result(result_str)
+        elif tool_call["name"] == "search_web":
+            sources = sources + _extract_sources_from_web_result(result_str)
 
         # Build running message history for multi-tool loop
         accumulated_messages = list(state["messages"]) + [response, tool_message]
@@ -252,6 +280,8 @@ async def agent_node(state: AgentState) -> AgentState:
             next_tool_message = ToolMessage(content=next_result, tool_call_id=next_tool_call["id"])
             if next_tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
                 sources = _extract_sources_from_tool_result(next_result)
+            elif next_tool_call["name"] == "search_web":
+                sources = sources + _extract_sources_from_web_result(next_result)
 
             accumulated_messages.extend([follow_up, next_tool_message])
             accumulated_new.extend([follow_up, next_tool_message])

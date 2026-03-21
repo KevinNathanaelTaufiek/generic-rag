@@ -1585,7 +1585,7 @@ export default function ChatPage() {
               className="text-sm text-gray-400 hover:text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 cursor-pointer"
               onClick={handleNewChat}
             >
-              New chat
+              Reset Chat
             </button>
           )}
         </div>

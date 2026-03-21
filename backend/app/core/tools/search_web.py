@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pydantic import BaseModel
 from langchain_core.tools import StructuredTool
 
@@ -32,11 +33,15 @@ class SearchWebTool(BaseTool):
             )
             if not results:
                 return "No results found for the given query."
-            lines = [
-                f"- {r['title']}: {r['content']} ({r['url']})"
+            # Return structured format for source extraction + LLM readability
+            structured = [
+                {"title": r["title"], "content": r["content"], "url": r["url"]}
                 for r in results
             ]
-            return "\n".join(lines)
+            # Human-readable for LLM, with JSON block for source extraction
+            lines = [f"- {r['title']}: {r['content']} ({r['url']})" for r in results]
+            readable = "\n".join(lines)
+            return f"{readable}\n\n[web_sources_json]\n{json.dumps(structured)}\n[/web_sources_json]"
         except Exception as e:
             return f"Error: Web search failed — {str(e)}"
 

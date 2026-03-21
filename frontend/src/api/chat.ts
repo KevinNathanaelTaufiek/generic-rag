@@ -9,6 +9,7 @@ export interface SourceRef {
   doc_id: string
   title: string
   excerpt: string
+  url?: string
 }
 
 export interface ToolCallInfo {
@@ -49,8 +50,8 @@ export interface ToolApprovalResponse {
   thread_id?: string
 }
 
-export async function sendMessage(req: ChatRequest): Promise<ChatResponse> {
-  const { data } = await api.post<ChatResponse>('/chat', req)
+export async function sendMessage(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+  const { data } = await api.post<ChatResponse>('/chat', req, { signal })
   return data
 }
 

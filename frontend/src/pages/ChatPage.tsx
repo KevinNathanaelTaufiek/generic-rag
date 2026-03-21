@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { sendMessage, approveToolCall } from '../api/chat'
 import ChatWindow from '../components/ChatWindow'
-import type { DisplayMessage } from '../components/ChatWindow'
+import type { DisplayMessage, AgentStep } from '../components/ChatWindow'
 import ChatInput from '../components/ChatInput'
 
 const ALL_TOOLS = ['search_knowledge', 'search_web', 'send_notification', 'get_random_number', 'crud_data']
@@ -22,9 +22,14 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   crud_data: 'Buat, baca, update, atau hapus data di sistem eksternal.',
 }
 
-export default function ChatPage() {
-  const [messages, setMessages] = useState<DisplayMessage[]>([])
-  const [sessionId, setSessionId] = useState<string | undefined>()
+interface Props {
+  messages: DisplayMessage[]
+  setMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>
+  sessionId: string | undefined
+  setSessionId: React.Dispatch<React.SetStateAction<string | undefined>>
+}
+
+export default function ChatPage({ messages, setMessages, sessionId, setSessionId }: Props) {
   const [loading, setLoading] = useState(false)
   const [strictMode, setStrictMode] = useState(false)
   const [pendingApproval, setPendingApproval] = useState(false)
@@ -32,6 +37,7 @@ export default function ChatPage() {
   const [toolsBeforeStrict, setToolsBeforeStrict] = useState<string[]>(['search_knowledge'])
   const [showToolMenu, setShowToolMenu] = useState(false)
   const toolMenuRef = useRef<HTMLDivElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -64,6 +70,9 @@ export default function ChatPage() {
     setMessages(prev => [...prev, userMsg])
     setLoading(true)
 
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     try {
       const history = messages
         .filter(m => m.status !== 'pending_tool_approval')
@@ -75,10 +84,13 @@ export default function ChatPage() {
         history,
         strict_mode: strictMode,
         enabled_tools: enabledTools,
-      })
+      }, controller.signal)
       setSessionId(res.session_id)
 
       if (res.status === 'pending_tool_approval') {
+        const steps: AgentStep[] = res.pending_tool
+          ? [{ status: 'tool_requested', tool_name: res.pending_tool.tool_name, description: res.pending_tool.description }]
+          : []
         setMessages(prev => [
           ...prev,
           {
@@ -87,6 +99,7 @@ export default function ChatPage() {
             status: 'pending_tool_approval',
             pending_tool: res.pending_tool,
             thread_id: res.thread_id,
+            steps,
           },
         ])
         setPendingApproval(true)
@@ -96,7 +109,8 @@ export default function ChatPage() {
           { role: 'assistant', content: res.answer, sources: res.sources, status: 'done' },
         ])
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === 'CanceledError') return
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: 'Sorry, something went wrong. Please try again.' },
@@ -111,12 +125,22 @@ export default function ChatPage() {
     setPendingApproval(false)
     setLoading(true)
 
+    // Capture current steps and approved tool name before mutating
+    let accumulatedSteps: AgentStep[] = []
     setMessages(prev =>
-      prev.map(m =>
-        m.thread_id === threadId
-          ? { ...m, content: '⏳ Executing tool...', status: 'done' as const, pending_tool: undefined }
-          : m
-      )
+      prev.map(m => {
+        if (m.thread_id !== threadId) return m
+        const approvedStep: AgentStep = {
+          status: 'tool_approved',
+          tool_name: m.pending_tool?.tool_name ?? '',
+        }
+        const executingStep: AgentStep = {
+          status: 'tool_executing',
+          tool_name: m.pending_tool?.tool_name ?? '',
+        }
+        accumulatedSteps = [...(m.steps ?? []), approvedStep, executingStep]
+        return { ...m, content: '', status: 'done' as const, pending_tool: undefined, steps: accumulatedSteps }
+      })
     )
 
     try {
@@ -124,22 +148,58 @@ export default function ChatPage() {
       setSessionId(res.session_id)
 
       if (res.status === 'pending_tool_approval') {
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: '',
-            status: 'pending_tool_approval',
+        const doneStep: AgentStep = {
+          status: 'tool_done',
+          tool_name: accumulatedSteps.find(s => s.status === 'tool_executing')?.tool_name ?? '',
+        }
+        const nextRequestedStep: AgentStep = res.pending_tool
+          ? { status: 'tool_requested', tool_name: res.pending_tool.tool_name, description: res.pending_tool.description }
+          : { status: 'tool_requested', tool_name: '' }
+        const nextSteps = [...accumulatedSteps, doneStep, nextRequestedStep]
+
+        // Replace the executing message with next approval card (merge steps)
+        setMessages(prev => {
+          const idx = prev.findLastIndex(m => m.steps === accumulatedSteps)
+          if (idx === -1) {
+            return [
+              ...prev,
+              {
+                role: 'assistant' as const,
+                content: '',
+                status: 'pending_tool_approval' as const,
+                pending_tool: res.pending_tool,
+                thread_id: res.thread_id,
+                steps: nextSteps,
+              },
+            ]
+          }
+          const updated = [...prev]
+          updated[idx] = {
+            ...updated[idx],
+            status: 'pending_tool_approval' as const,
             pending_tool: res.pending_tool,
             thread_id: res.thread_id,
-          },
-        ])
+            steps: nextSteps,
+          }
+          return updated
+        })
         setPendingApproval(true)
       } else {
-        setMessages(prev => [
-          ...prev,
-          { role: 'assistant', content: res.answer, sources: res.sources, status: 'done' },
-        ])
+        const doneStep: AgentStep = {
+          status: 'tool_done',
+          tool_name: accumulatedSteps.find(s => s.status === 'tool_executing')?.tool_name ?? '',
+        }
+        const finalSteps = [...accumulatedSteps, doneStep]
+        // Replace executing placeholder with final answer (keep steps)
+        setMessages(prev => {
+          const idx = prev.findLastIndex(m => m.steps === accumulatedSteps)
+          if (idx === -1) {
+            return [...prev, { role: 'assistant' as const, content: res.answer, sources: res.sources, status: 'done' as const, steps: finalSteps }]
+          }
+          const updated = [...prev]
+          updated[idx] = { ...updated[idx], content: res.answer, sources: res.sources, status: 'done' as const, steps: finalSteps }
+          return updated
+        })
       }
     } catch {
       setMessages(prev => [
@@ -156,21 +216,28 @@ export default function ChatPage() {
     setPendingApproval(false)
     setLoading(true)
 
+    let accumulatedSteps: AgentStep[] = []
     setMessages(prev =>
-      prev.map(m =>
-        m.thread_id === threadId
-          ? { ...m, content: '✗ Tool execution cancelled.', status: 'done' as const, pending_tool: undefined }
-          : m
-      )
+      prev.map(m => {
+        if (m.thread_id !== threadId) return m
+        const cancelledStep: AgentStep = { status: 'tool_cancelled', tool_name: m.pending_tool?.tool_name ?? '' }
+        accumulatedSteps = [...(m.steps ?? []), cancelledStep]
+        return { ...m, content: '', status: 'done' as const, pending_tool: undefined, steps: accumulatedSteps }
+      })
     )
 
     try {
       const res = await approveToolCall({ thread_id: threadId, session_id: sessionId, approved: false })
       setSessionId(res.session_id)
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant', content: res.answer, sources: res.sources, status: 'done' },
-      ])
+      setMessages(prev => {
+        const idx = prev.findLastIndex(m => m.steps === accumulatedSteps)
+        if (idx === -1) {
+          return [...prev, { role: 'assistant' as const, content: res.answer, sources: res.sources, status: 'done' as const, steps: accumulatedSteps }]
+        }
+        const updated = [...prev]
+        updated[idx] = { ...updated[idx], content: res.answer, sources: res.sources, status: 'done' as const }
+        return updated
+      })
     } catch {
       setMessages(prev => [
         ...prev,
@@ -181,10 +248,13 @@ export default function ChatPage() {
     }
   }
 
-  function handleNewChat() {
+  function handleResetChat() {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
     setMessages([])
     setSessionId(undefined)
     setPendingApproval(false)
+    setLoading(false)
   }
 
   const inputDisabled = loading || pendingApproval
@@ -262,9 +332,9 @@ export default function ChatPage() {
           {messages.length > 0 && (
             <button
               className="text-sm text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-1.5 cursor-pointer"
-              onClick={handleNewChat}
+              onClick={handleResetChat}
             >
-              New chat
+              Reset Chat
             </button>
           )}
         </div>

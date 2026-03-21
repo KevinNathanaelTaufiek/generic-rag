@@ -85,3 +85,31 @@ Dokumen ini mencatat keputusan arsitektur beserta alasannya.
 **Reasoning:** Mensimulasikan deployment separation yang nyata. Saat microservices asli bisa diakses, cukup ganti `DUMMY_SERVICES_BASE_URL` di `backend/.env`.
 
 **Migration:** `DUMMY_SERVICES_BASE_URL=https://real-service.internal` di `backend/.env`.
+
+---
+
+## ADR-007 — Dual-format output untuk search_web (2026-03-22)
+
+**Decision:** `search_web` tool mengembalikan dua format sekaligus: human-readable text untuk LLM + JSON block `[web_sources_json]` untuk source extraction di agent.
+
+**Reasoning:** LLM butuh teks natural untuk dijadikan jawaban; backend butuh structured data untuk populate `sources` di response API. Menggabungkan keduanya dalam satu string menghindari perubahan interface tool (LangChain tools hanya return string).
+
+**Trade-off:** Sedikit lebih verbose dalam output tool. Alternatif (return JSON murni) membuat LLM kesulitan membaca hasilnya.
+
+---
+
+## ADR-008 — Score threshold 0.6 untuk ChromaDB (2026-03-22)
+
+**Decision:** Threshold relevance dinaikkan dari 0.5 ke 0.6 di semua path (fast path + ReAct agent).
+
+**Reasoning:** Threshold 0.5 terlalu permissive — ChromaDB mengembalikan dokumen yang tidak relevan, menyebabkan LLM menjawab dengan informasi salah. Lebih baik "tidak tahu" daripada hallucinate.
+
+**Consequence:** Recall sedikit lebih rendah, precision lebih tinggi. Bisa diturunkan lagi jika KB kecil dan recall rendah.
+
+---
+
+## ADR-009 — React Router untuk navigasi frontend (2026-03-22)
+
+**Decision:** Migrasi dari tab state (`useState`) ke `react-router-dom` `<Routes>`.
+
+**Reasoning:** Mendukung deep linking, browser history navigation, dan persiapan untuk penambahan halaman baru di masa depan. State chat di-lift ke `AppInner` agar persist saat navigasi antar halaman.

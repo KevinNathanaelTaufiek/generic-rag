@@ -1,11 +1,21 @@
 import { useEffect, useRef } from 'react'
 import type { ChatMessage, SourceRef, ToolCallInfo } from '../api/chat'
 
+export type StepStatus = 'tool_requested' | 'tool_approved' | 'tool_cancelled' | 'tool_executing' | 'tool_done'
+
+export interface AgentStep {
+  status: StepStatus
+  tool_name: string
+  description?: string
+  round?: number
+}
+
 export interface DisplayMessage extends ChatMessage {
   sources?: SourceRef[]
   status?: 'done' | 'pending_tool_approval'
   pending_tool?: ToolCallInfo
   thread_id?: string
+  steps?: AgentStep[]
 }
 
 interface Props {
@@ -25,11 +35,57 @@ function SourcesBlock({ sources }: { sources: SourceRef[] }) {
       <ul className="mt-2 space-y-2">
         {sources.map(src => (
           <li key={src.doc_id} className="rounded-lg bg-indigo-50 dark:bg-indigo-900/40 px-3 py-2">
-            <p className="font-semibold text-indigo-700 dark:text-indigo-300">{src.title}</p>
+            {src.url ? (
+              <a
+                href={src.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-indigo-700 dark:text-indigo-300 hover:underline"
+              >
+                {src.title} ↗
+              </a>
+            ) : (
+              <p className="font-semibold text-indigo-700 dark:text-indigo-300">{src.title}</p>
+            )}
             <p className="text-gray-500 dark:text-slate-400 mt-0.5 line-clamp-2">{src.excerpt}</p>
           </li>
         ))}
       </ul>
+    </details>
+  )
+}
+
+const STEP_CONFIG: Record<StepStatus, { icon: string; label: string; color: string }> = {
+  tool_requested: { icon: '🤔', label: 'LLM meminta tool', color: 'text-amber-600 dark:text-amber-400' },
+  tool_approved:  { icon: '✓',  label: 'Disetujui',         color: 'text-green-600 dark:text-green-400' },
+  tool_cancelled: { icon: '✗',  label: 'Dibatalkan',        color: 'text-red-500 dark:text-red-400' },
+  tool_executing: { icon: '⏳', label: 'Menjalankan tool',  color: 'text-blue-500 dark:text-blue-400' },
+  tool_done:      { icon: '✔',  label: 'Tool selesai',      color: 'text-gray-500 dark:text-slate-400' },
+}
+
+function AgentStepsLog({ steps }: { steps: AgentStep[] }) {
+  if (!steps.length) return null
+  return (
+    <details className="mb-3" open>
+      <summary className="cursor-pointer text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 select-none font-medium">
+        {steps.length} agent step{steps.length > 1 ? 's' : ''}
+      </summary>
+      <ol className="mt-2 space-y-1 border-l-2 border-gray-100 dark:border-slate-600 pl-3">
+        {steps.map((step, i) => {
+          const cfg = STEP_CONFIG[step.status]
+          return (
+            <li key={i} className="text-xs">
+              <span className={`font-medium ${cfg.color}`}>
+                {cfg.icon} {cfg.label}
+              </span>
+              <span className="text-gray-400 dark:text-slate-500 ml-1">
+                — <code className="font-mono">{step.tool_name}</code>
+                {step.description && <span className="italic"> ({step.description})</span>}
+              </span>
+            </li>
+          )
+        })}
+      </ol>
     </details>
   )
 }
@@ -88,7 +144,12 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
       {messages.map((msg, i) => {
         if (msg.role === 'assistant' && msg.status === 'pending_tool_approval' && msg.pending_tool && msg.thread_id) {
           return (
-            <div key={i} className="flex justify-start">
+            <div key={i} className="flex justify-start flex-col gap-1">
+              {msg.steps && msg.steps.length > 0 && (
+                <div className="max-w-[75%]">
+                  <AgentStepsLog steps={msg.steps} />
+                </div>
+              )}
               <ToolApprovalCard
                 pending_tool={msg.pending_tool}
                 thread_id={msg.thread_id}
@@ -111,6 +172,9 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
                   : 'bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 text-gray-800 dark:text-slate-100 rounded-bl-sm shadow-sm'
               }`}
             >
+              {msg.role === 'assistant' && msg.steps && msg.steps.length > 0 && (
+                <AgentStepsLog steps={msg.steps} />
+              )}
               <p className="whitespace-pre-wrap">{msg.content}</p>
               {msg.role === 'assistant' && msg.sources && (
                 <SourcesBlock sources={msg.sources} />

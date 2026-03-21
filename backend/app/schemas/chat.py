@@ -11,6 +11,7 @@ class SourceRef(BaseModel):
     doc_id: str
     title: str
     excerpt: str
+    url: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
