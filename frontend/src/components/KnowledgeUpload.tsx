@@ -48,23 +48,23 @@ export default function KnowledgeUpload({ onAdded }: Props) {
   return (
     <div className="space-y-4">
       {/* Text input */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm space-y-3">
-        <h2 className="font-semibold text-gray-700">Add text</h2>
+      <div className="rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm space-y-3">
+        <h2 className="font-semibold text-gray-700 dark:text-slate-300">Add text</h2>
         <input
-          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className="w-full rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-gray-900 dark:text-slate-100 placeholder-gray-400 dark:placeholder-slate-500 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:focus:ring-indigo-500"
           placeholder="Title (optional)"
           value={title}
           onChange={e => setTitle(e.target.value)}
         />
         <textarea
-          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
+          className="w-full rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-gray-900 dark:text-slate-100 placeholder-gray-400 dark:placeholder-slate-500 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:focus:ring-indigo-500 resize-none"
           rows={5}
           placeholder="Paste your text here..."
           value={text}
           onChange={e => setText(e.target.value)}
         />
         <button
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 cursor-pointer"
+          className="rounded-lg bg-indigo-600 dark:bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-50 cursor-pointer"
           onClick={handleAddText}
           disabled={loading || !text.trim()}
         >
@@ -73,20 +73,20 @@ export default function KnowledgeUpload({ onAdded }: Props) {
       </div>
 
       {/* File upload */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm space-y-3">
-        <h2 className="font-semibold text-gray-700">Upload file</h2>
-        <p className="text-xs text-gray-400">Supported: PDF, TXT, MD</p>
+      <div className="rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm space-y-3">
+        <h2 className="font-semibold text-gray-700 dark:text-slate-300">Upload file</h2>
+        <p className="text-xs text-gray-400 dark:text-slate-500">Supported: PDF, TXT, MD</p>
         <input
           ref={fileRef}
           type="file"
           accept=".pdf,.txt,.md"
-          className="block text-sm text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+          className="block text-sm text-gray-500 dark:text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 dark:file:bg-indigo-900/40 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 dark:file:text-indigo-300 hover:file:bg-indigo-100 dark:hover:file:bg-indigo-900/60 cursor-pointer"
           onChange={handleFileChange}
           disabled={loading}
         />
       </div>
 
-      {error && <p className="text-sm text-red-500">{error}</p>}
+      {error && <p className="text-sm text-red-500 dark:text-red-400">{error}</p>}
     </div>
   )
 }

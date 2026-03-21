@@ -80,12 +80,77 @@ Kondisi fast path aktif:
 
 ---
 
+## 7. Refactor Tools ke Module Terpisah
+
+`backend/app/core/tools.py` (satu file besar) dipecah jadi package `backend/app/core/tools/`:
+
+| File | Isi |
+|---|---|
+| `base.py` | Base class & helper shared |
+| `search_knowledge.py` | Tool pencarian KB (ChromaDB) |
+| `search_web.py` | Tool pencarian web (Tavily) |
+| `microservice.py` | Tool untuk microservice eksternal |
+| `__init__.py` | Export semua tool |
+
+Keuntungan: setiap tool terisolasi, mudah ditambah tool baru tanpa edit file yang sama.
+
+---
+
+## 8. Microservice Tool System
+
+Tools untuk microservice eksternal kini **data-driven** — tidak perlu tulis kode Python untuk tambah tool baru. Cukup daftarkan endpoint di `backend/microservices.json`:
+
+```json
+{
+  "name": "send_notification",
+  "description": "...",
+  "endpoint": "http://localhost:8001/notify",
+  "method": "POST",
+  "args_schema": { ... },
+  "response_schema": { ... }
+}
+```
+
+Microservices yang sudah terdaftar: `send_notification`, `get_random_number`, `crud_data`.
+
+Backend baca file JSON saat startup → generate LangChain tools otomatis.
+`dummy_services/routes/search.py` dihapus karena sudah tidak dipakai.
+
+---
+
+## 9. Web Search Tool (Tavily)
+
+Ditambahkan tool `search_web` menggunakan **Tavily API**:
+- Tambah `TAVILY_API_KEY` di `.env.example` dan `config.py`
+- Tambah `tavily-python==0.5.0` di `requirements.txt`
+- Tool tersedia di toggle list di frontend
+
+---
+
+## 10. Dark Mode
+
+Seluruh UI frontend mendukung dark mode dengan toggle di navbar:
+
+- `ThemeContext` (`frontend/src/context/ThemeContext.tsx`) — context + localStorage persistence
+- `App.tsx` dibungkus `ThemeProvider`, ada tombol toggle ☀️/🌙 di header
+- Semua komponen (`ChatWindow`, `ChatPage`, `ChatInput`, `KnowledgeList`, `KnowledgeUpload`) sudah pakai Tailwind `dark:` variants
+- `index.css` menambah `dark` class support
+
+---
+
+## 11. Fix Retrieval Service
+
+`backend/app/services/retrieval.py` direfactor untuk akses ChromaDB secara langsung (`chromadb.PersistentClient`) menggantikan `get_vectorstore()` — lebih stabil dan tidak bergantung pada LangChain wrapper.
+
+---
+
 ## Tech Stack
 
 - **Backend:** FastAPI + LangGraph (ReAct agent) + ChromaDB + Gemini 2.5 Flash
 - **Embedding:** gemini-embedding-001
 - **Frontend:** React + Tailwind v4
 - **Pattern:** RAG klasik (fast path) + ReAct agent (multi-tool)
+- **Web Search:** Tavily API
 
 ---
 
@@ -95,3 +160,5 @@ Kondisi fast path aktif:
 2. **Prompt saja tidak cukup** — Gemini tetap conservative meski diperintah via system prompt, butuh logic di backend
 3. **Score threshold penting** — tanpa threshold, ChromaDB selalu return hasil meski tidak relevan
 4. **Fast path > flexibility** untuk use case sederhana — skip LLM decision step kalau toolnya sudah pasti
+5. **Data-driven tools** — daftar microservice di JSON jauh lebih scalable daripada hardcode per tool
+6. **ThemeContext + localStorage** — pola standar untuk dark mode di React tanpa library tambahan

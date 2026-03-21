@@ -45,11 +45,9 @@ export default function ChatPage() {
 
   function toggleStrictMode() {
     if (!strictMode) {
-      // Turning ON: save current tools, force knowledge-only
       setToolsBeforeStrict(enabledTools)
       setEnabledTools(['search_knowledge'])
     } else {
-      // Turning OFF: restore previous tools
       setEnabledTools(toolsBeforeStrict)
     }
     setStrictMode(prev => !prev)
@@ -192,34 +190,34 @@ export default function ChatPage() {
   const inputDisabled = loading || pendingApproval
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8 flex flex-col h-screen">
+    <div className="max-w-3xl mx-auto px-4 py-8 flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 10vh)' }}>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Chat</h1>
-          <p className="text-sm text-gray-500">Ask questions based on your knowledge base.</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-slate-100">Chat</h1>
+          <p className="text-sm text-gray-500 dark:text-slate-400">Ask questions based on your knowledge base.</p>
         </div>
         <div className="flex items-center gap-3">
           <button
             className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
               strictMode
-                ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                : 'bg-gray-50 border-gray-200 text-gray-500'
+                ? 'bg-indigo-50 dark:bg-indigo-900/40 border-indigo-300 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300'
+                : 'bg-gray-50 dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-500 dark:text-slate-400'
             }`}
             onClick={toggleStrictMode}
             title={strictMode
               ? 'Strict mode ON: hanya menjawab dari knowledge base. Klik untuk menonaktifkan.'
               : 'Strict mode OFF: LLM boleh menggunakan general knowledge. Klik untuk mengaktifkan dan membatasi jawaban hanya dari knowledge base.'}
           >
-            {strictMode ? '🔒 Strict' : '💬 Bebas'}
+            {strictMode ? '🔒 Strict' : '🔓 Flexible'}
           </button>
           <div className="relative" ref={toolMenuRef}>
             <button
               className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
                 enabledTools.length === 0
-                  ? 'bg-red-50 border-red-200 text-red-500'
+                  ? 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-700 text-red-500 dark:text-red-400'
                   : enabledTools.length < ALL_TOOLS.length
-                  ? 'bg-amber-50 border-amber-300 text-amber-700'
-                  : 'bg-gray-50 border-gray-200 text-gray-600'
+                  ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-300 dark:border-amber-600 text-amber-700 dark:text-amber-400'
+                  : 'bg-gray-50 dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-600 dark:text-slate-400'
               }`}
               onClick={() => setShowToolMenu(prev => !prev)}
               title="Toggle active tools"
@@ -227,12 +225,13 @@ export default function ChatPage() {
               Tools {enabledTools.length}/{ALL_TOOLS.length}
             </button>
             {showToolMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-44">
-                <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
-                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Active Tools</span>
+              <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg z-10 min-w-44">
+                <div className="px-3 py-2 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wide">Active Tools</span>
                   <button
-                    className="text-xs text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                    className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                     onClick={() => setEnabledTools(enabledTools.length === ALL_TOOLS.length ? [] : [...ALL_TOOLS])}
+                    disabled={strictMode}
                   >
                     {enabledTools.length === ALL_TOOLS.length ? 'Disable all' : 'Enable all'}
                   </button>
@@ -243,7 +242,7 @@ export default function ChatPage() {
                   return (
                     <label
                       key={name}
-                      className={`flex items-center gap-2 px-3 py-2 ${disabledByStrict || locked ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50 cursor-pointer'}`}
+                      className={`flex items-center gap-2 px-3 py-2 ${disabledByStrict || locked ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer'}`}
                       title={disabledByStrict ? 'Nonaktifkan strict mode untuk mengaktifkan tool ini.' : locked ? 'Terkunci saat strict mode aktif.' : TOOL_DESCRIPTIONS[name]}
                     >
                       <input
@@ -253,7 +252,7 @@ export default function ChatPage() {
                         disabled={strictMode}
                         className="accent-indigo-600"
                       />
-                      <span className="text-sm text-gray-700">{TOOL_LABELS[name]}</span>
+                      <span className="text-sm text-gray-700 dark:text-slate-300">{TOOL_LABELS[name]}</span>
                     </label>
                   )
                 })}
@@ -262,7 +261,7 @@ export default function ChatPage() {
           </div>
           {messages.length > 0 && (
             <button
-              className="text-sm text-gray-400 hover:text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 cursor-pointer"
+              className="text-sm text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-1.5 cursor-pointer"
               onClick={handleNewChat}
             >
               New chat
@@ -271,7 +270,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      <div className="flex flex-col flex-1 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden shadow-sm">
+      <div className="flex flex-col flex-1 rounded-2xl border border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800/50 overflow-hidden shadow-sm">
         <ChatWindow
           messages={messages}
           loading={loading}

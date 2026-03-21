@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     google_api_key: str = ""
+    tavily_api_key: str = ""
 
     chroma_persist_dir: str = "./data/chroma"
     collection_name: str = "generic_rag"

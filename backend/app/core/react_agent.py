@@ -204,24 +204,66 @@ async def agent_node(state: AgentState) -> AgentState:
         if tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
             sources = _extract_sources_from_tool_result(result_str)
 
-        is_knowledge_call = tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name
-        no_results = is_knowledge_call and "[source:" not in result_str
+        # Build running message history for multi-tool loop
+        accumulated_messages = list(state["messages"]) + [response, tool_message]
+        accumulated_new = [response, tool_message]
 
-        t4 = time.perf_counter()
-        if no_results and not strict_mode and only_knowledge:
-            fallback_prompt = (
-                "You are a helpful assistant. "
-                "The knowledge base did not contain relevant information for the user's question. "
-                "Answer using your general training knowledge, and clearly state the answer is not from the knowledge base."
-            )
-            follow_up = await llm.ainvoke(
-                [SystemMessage(content=fallback_prompt)] + state["messages"][1:] + [response, tool_message]
-            )
+        # Loop: allow LLM to call additional tools (e.g. search_web after search_knowledge)
+        MAX_TOOL_ROUNDS = 5
+        for _round in range(MAX_TOOL_ROUNDS - 1):
+            t4 = time.perf_counter()
+            follow_up = await llm_with_tools.ainvoke(accumulated_messages)
+            logger.info("[agent] LLM call (round %d) took %.2fs | tool_calls=%s", _round + 2, time.perf_counter() - t4, [tc["name"] for tc in follow_up.tool_calls])
+
+            if not follow_up.tool_calls:
+                accumulated_new.append(follow_up)
+                break
+
+            next_tool_call = follow_up.tool_calls[0]
+
+            # Approval gate for non-knowledge tools
+            if next_tool_call["name"] != SEARCH_KNOWLEDGE_TOOL.name:
+                pending_info = {
+                    "id": next_tool_call["id"],
+                    "tool_name": next_tool_call["name"],
+                    "tool_args": next_tool_call["args"],
+                }
+                approved: bool = interrupt(pending_info)
+                if not approved:
+                    cancel_msg = HumanMessage(
+                        content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
+                    )
+                    clarification = await llm_with_tools.ainvoke(accumulated_messages + [follow_up, cancel_msg])
+                    accumulated_new.extend([follow_up, cancel_msg, clarification])
+                    break
+
+            next_tool = tool_map.get(next_tool_call["name"])
+            if next_tool is None:
+                next_result = f"Error: Unknown tool '{next_tool_call['name']}'"
+            else:
+                try:
+                    t5 = time.perf_counter()
+                    next_result = await next_tool.ainvoke(next_tool_call["args"])
+                    logger.info("[agent] tool '%s' took %.2fs | result_len=%d", next_tool_call["name"], time.perf_counter() - t5, len(next_result))
+                except Exception as e:
+                    next_result = f"Error: Tool execution failed — {str(e)}"
+                    logger.error("[agent] tool '%s' failed: %s", next_tool_call["name"], e)
+
+            next_tool_message = ToolMessage(content=next_result, tool_call_id=next_tool_call["id"])
+            if next_tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
+                sources = _extract_sources_from_tool_result(next_result)
+
+            accumulated_messages.extend([follow_up, next_tool_message])
+            accumulated_new.extend([follow_up, next_tool_message])
         else:
-            follow_up = await llm_with_tools.ainvoke(state["messages"] + [response, tool_message])
-        logger.info("[agent] LLM call #2 (answer generation) took %.2fs", time.perf_counter() - t4)
+            # Hit MAX_TOOL_ROUNDS without a final answer — generate one
+            t4 = time.perf_counter()
+            follow_up = await llm_with_tools.ainvoke(accumulated_messages)
+            logger.info("[agent] LLM final answer after max rounds took %.2fs", time.perf_counter() - t4)
+            accumulated_new.append(follow_up)
+
         logger.info("[agent] total node time %.2fs", time.perf_counter() - t0)
-        return {**state, "messages": [response, tool_message, follow_up], "sources": sources}
+        return {**state, "messages": accumulated_new, "sources": sources}
 
     # No tool call — direct answer
     logger.info("[agent] no tool call, direct answer | total %.2fs", time.perf_counter() - t0)
