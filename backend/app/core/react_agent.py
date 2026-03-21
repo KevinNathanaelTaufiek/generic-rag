@@ -1,4 +1,6 @@
 import uuid
+import time
+import logging
 from typing import Annotated, Any
 
 from typing_extensions import TypedDict
@@ -11,6 +13,8 @@ from langgraph.types import interrupt, Command
 from app.core.llm import get_llm
 from app.core.tools import TOOLS, get_tools, SEARCH_KNOWLEDGE_TOOL
 from app.schemas.chat import ToolCallInfo
+
+logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
@@ -109,16 +113,54 @@ def _extract_sources_from_tool_result(result_str: str) -> list[dict]:
 
 
 async def agent_node(state: AgentState) -> AgentState:
+    t0 = time.perf_counter()
     llm = get_llm()
     enabled_tools = state.get("enabled_tools") or []
+    strict_mode = state.get("strict_mode", False)
+    only_knowledge = "search_knowledge" in enabled_tools and not any(t != "search_knowledge" for t in enabled_tools)
+    logger.info("[agent] node started | strict=%s | tools=%s | only_knowledge=%s", strict_mode, enabled_tools, only_knowledge)
+
+    # --- Fast path: skip LLM #1 when only knowledge base is active ---
+    if only_knowledge or (strict_mode and "search_knowledge" in enabled_tools):
+        user_query = _extract_text(state["messages"][-1].content)
+        logger.info("[agent] fast path: skipping LLM #1, directly executing search_knowledge")
+
+        t1 = time.perf_counter()
+        result_str = await SEARCH_KNOWLEDGE_TOOL.ainvoke({"query": user_query})
+        logger.info("[agent] tool 'search_knowledge' took %.2fs | result_len=%d", time.perf_counter() - t1, len(result_str))
+
+        sources = _extract_sources_from_tool_result(result_str)
+        no_results = "[source:" not in result_str
+
+        messages = list(state["messages"])
+        if no_results and not strict_mode:
+            system_prompt = (
+                "You are a helpful assistant. "
+                "The knowledge base did not contain relevant information for the user's question. "
+                "Answer using your general training knowledge, and clearly state the answer is not from the knowledge base."
+            )
+        else:
+            system_prompt = _build_system_prompt(enabled_tools, strict_mode)
+            system_prompt += f"\n\nKnowledge base results:\n{result_str}"
+
+        messages[0] = SystemMessage(content=system_prompt)
+
+        t2 = time.perf_counter()
+        response = await llm.ainvoke(messages)
+        logger.info("[agent] LLM call #1 (answer generation, fast path) took %.2fs", time.perf_counter() - t2)
+        logger.info("[agent] total node time %.2fs", time.perf_counter() - t0)
+        return {**state, "messages": [response], "sources": sources}
+
+    # --- Normal ReAct path: LLM decides which tool to call ---
     active_tools = get_tools(enabled_tools)
     llm_with_tools = llm.bind_tools(active_tools)
 
-    # Replace system prompt dynamically based on mode
     messages = list(state["messages"])
-    messages[0] = SystemMessage(content=_build_system_prompt(enabled_tools, state.get("strict_mode", False)))
+    messages[0] = SystemMessage(content=_build_system_prompt(enabled_tools, strict_mode))
 
+    t1 = time.perf_counter()
     response = await llm_with_tools.ainvoke(messages)
+    logger.info("[agent] LLM call #1 (decision) took %.2fs | tool_calls=%s", time.perf_counter() - t1, [tc["name"] for tc in response.tool_calls])
 
     if response.tool_calls:
         tool_call = response.tool_calls[0]
@@ -138,36 +180,34 @@ async def agent_node(state: AgentState) -> AgentState:
                 cancel_msg = HumanMessage(
                     content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
                 )
+                t3 = time.perf_counter()
                 clarification = await llm_with_tools.ainvoke(state["messages"] + [response, cancel_msg])
+                logger.info("[agent] LLM call #2 (cancel clarification) took %.2fs", time.perf_counter() - t3)
                 return {**state, "messages": [response, cancel_msg, clarification]}
+
         tool = tool_map.get(tool_call["name"])
 
         if tool is None:
             result_str = f"Error: Unknown tool '{tool_call['name']}'"
         else:
             try:
+                t3 = time.perf_counter()
                 result_str = await tool.ainvoke(tool_call["args"])
+                logger.info("[agent] tool '%s' took %.2fs | result_len=%d", tool_call["name"], time.perf_counter() - t3, len(result_str))
             except Exception as e:
                 result_str = f"Error: Tool execution failed — {str(e)}"
+                logger.error("[agent] tool '%s' failed: %s", tool_call["name"], e)
 
-        tool_message = ToolMessage(
-            content=result_str,
-            tool_call_id=tool_call["id"],
-        )
+        tool_message = ToolMessage(content=result_str, tool_call_id=tool_call["id"])
 
-        # Extract sources if this was a knowledge search
         sources = list(state.get("sources") or [])
         if tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
             sources = _extract_sources_from_tool_result(result_str)
 
-        # Continue reasoning with tool result
-        # If knowledge search returned no relevant results and strict mode is off,
-        # rebind LLM without tools to force general knowledge fallback
         is_knowledge_call = tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name
         no_results = is_knowledge_call and "[source:" not in result_str
-        strict_mode = state.get("strict_mode", False)
-        only_knowledge = not any(t != "search_knowledge" for t in enabled_tools)
 
+        t4 = time.perf_counter()
         if no_results and not strict_mode and only_knowledge:
             fallback_prompt = (
                 "You are a helpful assistant. "
@@ -179,9 +219,12 @@ async def agent_node(state: AgentState) -> AgentState:
             )
         else:
             follow_up = await llm_with_tools.ainvoke(state["messages"] + [response, tool_message])
+        logger.info("[agent] LLM call #2 (answer generation) took %.2fs", time.perf_counter() - t4)
+        logger.info("[agent] total node time %.2fs", time.perf_counter() - t0)
         return {**state, "messages": [response, tool_message, follow_up], "sources": sources}
 
     # No tool call — direct answer
+    logger.info("[agent] no tool call, direct answer | total %.2fs", time.perf_counter() - t0)
     return {**state, "messages": [response]}
 
 
