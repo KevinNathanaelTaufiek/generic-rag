@@ -91,19 +91,34 @@ def reindex_all() -> int:
     if not result["documents"]:
         return 0
 
-    # Delete existing collection and recreate with new embeddings
-    client.delete_collection(settings.collection_name)
-
-    embeddings = get_embeddings()
-    new_vs = Chroma(
-        client=client,
-        collection_name=settings.collection_name,
-        embedding_function=embeddings,
-    )
-
     docs = [
         Document(page_content=text, metadata=meta)
         for text, meta in zip(result["documents"], result["metadatas"])
     ]
-    new_vs.add_documents(docs)
+
+    # Embed dulu ke collection sementara — jika gagal, collection asli tetap aman
+    tmp_name = f"{settings.collection_name}_reindex_tmp"
+    try:
+        embeddings = get_embeddings()
+        tmp_vs = Chroma(
+            client=client,
+            collection_name=tmp_name,
+            embedding_function=embeddings,
+        )
+        tmp_vs.add_documents(docs)
+    except Exception:
+        client.delete_collection(tmp_name)
+        raise
+
+    # Embedding berhasil — swap collection
+    client.delete_collection(settings.collection_name)
+    client.get_collection(tmp_name)  # verify exists
+    # Rename tidak didukung chromadb, jadi re-embed ke collection final
+    final_vs = Chroma(
+        client=client,
+        collection_name=settings.collection_name,
+        embedding_function=embeddings,
+    )
+    final_vs.add_documents(docs)
+    client.delete_collection(tmp_name)
     return len(docs)

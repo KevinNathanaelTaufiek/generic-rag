@@ -25,7 +25,7 @@ def retrieve_node(state: RAGState) -> RAGState:
 
     context_docs = []
     for doc, score in results:
-        if score >= 0.6:
+        if score >= settings.similarity_threshold:
             context_docs.append({
                 "content": doc.page_content,
                 "metadata": doc.metadata,

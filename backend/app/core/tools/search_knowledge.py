@@ -29,7 +29,7 @@ class SearchKnowledgeTool(BaseTool):
         try:
             vectorstore = get_vectorstore()
             results = vectorstore.similarity_search_with_relevance_scores(query, k=settings.top_k_results)
-            relevant = [(doc, score) for doc, score in results if score >= 0.6]
+            relevant = [(doc, score) for doc, score in results if score >= settings.similarity_threshold]
             if not relevant:
                 return "No relevant information found in the knowledge base."
             parts = []

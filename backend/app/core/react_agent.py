@@ -1,16 +1,18 @@
 import uuid
 import time
+import asyncio
 import logging
 import json
 from typing import Annotated, Any
 
 from typing_extensions import TypedDict
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 
+from app.config import settings
 from app.core.llm import get_llm
 from app.core.tools import TOOLS, get_tools, SEARCH_KNOWLEDGE_TOOL
 from app.schemas.chat import ToolCallInfo
@@ -26,7 +28,20 @@ class AgentState(TypedDict):
 
 
 # Shared MemorySaver — persists for the process lifetime (in-memory, MVP only)
+# TODO(prod): ganti ke AsyncRedisSaver (langgraph-checkpoint-redis) untuk multi-instance
+# dan survive restart. TTL manual di bawah bisa dihapus, pakai native TTL Redis.
 _memory = MemorySaver()
+
+THREAD_TTL_SECONDS = 3600  # 1 hour
+
+def _schedule_thread_cleanup(thread_id: str) -> None:
+    """Schedule deletion of a thread after TTL expires (handles abandoned approval requests)."""
+    async def _cleanup():
+        await asyncio.sleep(THREAD_TTL_SECONDS)
+        _memory.delete_thread(thread_id)
+        logger.debug("[agent] TTL cleanup: deleted thread %s", thread_id)
+
+    asyncio.ensure_future(_cleanup())
 
 
 def _extract_text(content) -> str:
@@ -139,45 +154,48 @@ async def agent_node(state: AgentState) -> AgentState:
     logger.info("[agent] node started | strict=%s | tools=%s | only_knowledge=%s", strict_mode, enabled_tools, only_knowledge)
 
     # --- Fast path: skip LLM #1 when only knowledge base is active ---
-    if only_knowledge or (strict_mode and "search_knowledge" in enabled_tools):
-        user_query = _extract_text(state["messages"][-1].content)
-        logger.info("[agent] fast path: skipping LLM #1, directly executing search_knowledge")
+    # To re-enable: uncomment this block and comment out the ReAct path below
+    # if only_knowledge or (strict_mode and "search_knowledge" in enabled_tools):
+    #     user_query = _extract_text(state["messages"][-1].content)
+    #
+    #     logger.info("[agent] fast path: skipping LLM #1, directly executing search_knowledge")
+    #
+    #     t1 = time.perf_counter()
+    #     result_str = await SEARCH_KNOWLEDGE_TOOL.ainvoke({"query": user_query})
+    #     logger.info("[agent] tool 'search_knowledge' took %.2fs | result_len=%d", time.perf_counter() - t1, len(result_str))
+    #
+    #     sources = _extract_sources_from_tool_result(result_str)
+    #     no_results = "[source:" not in result_str
+    #
+    #     if no_results and strict_mode:
+    #         logger.info("[agent] strict mode: no knowledge base results, refusing to answer from general knowledge")
+    #         return {
+    #             **state,
+    #             "messages": [AIMessage(content="Maaf, informasi tersebut tidak ditemukan di knowledge base. Saya tidak dapat menjawab pertanyaan ini berdasarkan sumber yang tersedia.")],
+    #             "sources": [],
+    #         }
+    #
+    #     messages = list(state["messages"])
+    #     if no_results and not strict_mode:
+    #         system_prompt = (
+    #             "You are a helpful assistant. "
+    #             "The knowledge base did not contain relevant information for the user's question. "
+    #             "Answer using your general training knowledge, and clearly state the answer is not from the knowledge base."
+    #         )
+    #     else:
+    #         system_prompt = _build_system_prompt(enabled_tools, strict_mode)
+    #         system_prompt += f"\n\nKnowledge base results:\n{result_str}"
+    #
+    #     messages[0] = SystemMessage(content=system_prompt)
+    #
+    #     t2 = time.perf_counter()
+    #     response = await llm.ainvoke(messages)
+    #     logger.info("[agent] LLM call #1 (answer generation, fast path) took %.2fs", time.perf_counter() - t2)
+    #     logger.info("[agent] total node time %.2fs", time.perf_counter() - t0)
+    #     return {**state, "messages": [response], "sources": sources}
 
-        t1 = time.perf_counter()
-        result_str = await SEARCH_KNOWLEDGE_TOOL.ainvoke({"query": user_query})
-        logger.info("[agent] tool 'search_knowledge' took %.2fs | result_len=%d", time.perf_counter() - t1, len(result_str))
-
-        sources = _extract_sources_from_tool_result(result_str)
-        no_results = "[source:" not in result_str
-
-        if no_results and strict_mode:
-            logger.info("[agent] strict mode: no knowledge base results, refusing to answer from general knowledge")
-            return {
-                **state,
-                "messages": [AIMessage(content="Maaf, informasi tersebut tidak ditemukan di knowledge base. Saya tidak dapat menjawab pertanyaan ini berdasarkan sumber yang tersedia.")],
-                "sources": [],
-            }
-
-        messages = list(state["messages"])
-        if no_results and not strict_mode:
-            system_prompt = (
-                "You are a helpful assistant. "
-                "The knowledge base did not contain relevant information for the user's question. "
-                "Answer using your general training knowledge, and clearly state the answer is not from the knowledge base."
-            )
-        else:
-            system_prompt = _build_system_prompt(enabled_tools, strict_mode)
-            system_prompt += f"\n\nKnowledge base results:\n{result_str}"
-
-        messages[0] = SystemMessage(content=system_prompt)
-
-        t2 = time.perf_counter()
-        response = await llm.ainvoke(messages)
-        logger.info("[agent] LLM call #1 (answer generation, fast path) took %.2fs", time.perf_counter() - t2)
-        logger.info("[agent] total node time %.2fs", time.perf_counter() - t0)
-        return {**state, "messages": [response], "sources": sources}
-
-    # --- Normal ReAct path: LLM decides which tool to call ---
+    # --- ReAct path: LLM decides which tool to call (supports multi-turn context) ---
+    # To re-enable fast path: comment out this block and uncomment the fast path above
     active_tools = get_tools(enabled_tools)
     llm_with_tools = llm.bind_tools(active_tools)
 
@@ -228,7 +246,7 @@ async def agent_node(state: AgentState) -> AgentState:
 
         sources = list(state.get("sources") or [])
         if tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
-            sources = _extract_sources_from_tool_result(result_str)
+            sources = sources + _extract_sources_from_tool_result(result_str)
         elif tool_call["name"] == "search_web":
             sources = sources + _extract_sources_from_web_result(result_str)
 
@@ -279,7 +297,7 @@ async def agent_node(state: AgentState) -> AgentState:
 
             next_tool_message = ToolMessage(content=next_result, tool_call_id=next_tool_call["id"])
             if next_tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
-                sources = _extract_sources_from_tool_result(next_result)
+                sources = sources + _extract_sources_from_tool_result(next_result)
             elif next_tool_call["name"] == "search_web":
                 sources = sources + _extract_sources_from_web_result(next_result)
 
@@ -324,7 +342,8 @@ async def run_agent(message: str, history: list[dict], session_id: str, enabled_
     """
     # Placeholder system message — agent_node replaces this dynamically based on enabled_tools
     messages = [SystemMessage(content="")]
-    for turn in history:
+    trimmed_history = history[-(settings.max_history_turns * 2):]
+    for turn in trimmed_history:
         if turn.get("role") == "user":
             messages.append(HumanMessage(content=turn["content"]))
         else:
@@ -356,6 +375,7 @@ async def run_agent(message: str, history: list[dict], session_id: str, enabled_
                 pending_info.get("tool_args", {}),
             ),
         )
+        _schedule_thread_cleanup(thread_id)
         return {
             "status": "pending_tool_approval",
             "answer": "",
@@ -368,6 +388,8 @@ async def run_agent(message: str, history: list[dict], session_id: str, enabled_
     # Completed without interruption
     final_message = result["messages"][-1]
     answer = _extract_text(final_message.content) if hasattr(final_message, "content") else str(final_message)
+
+    _memory.delete_thread(thread_id)
 
     return {
         "status": "done",
@@ -421,6 +443,8 @@ async def resume_agent(thread_id: str, approved: bool, session_id: str) -> dict[
     # Completed
     final_message = result["messages"][-1]
     answer = _extract_text(final_message.content) if hasattr(final_message, "content") else str(final_message)
+
+    _memory.delete_thread(thread_id)
 
     return {
         "status": "done",
