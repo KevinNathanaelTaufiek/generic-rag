@@ -182,6 +182,41 @@ Dokumen ini mencatat keputusan arsitektur beserta alasannya.
 
 ---
 
+## ADR-015 — Dynamic Tool Registry via API (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** Frontend fetch daftar tool dari `GET /api/v1/chat/tools` saat mount, bukan hardcode di `chatStore.ts` dan `ChatPage.tsx`.
+
+**Reasoning:**
+- Sebelumnya ada 3 tempat yang harus diupdate manual saat tambah/hapus tool di `microservices.json`: `ALL_TOOLS` di store, `TOOL_LABELS`, dan `TOOL_DESCRIPTIONS` di ChatPage
+- Dengan dynamic registry, tambah tool di `microservices.json` → otomatis muncul di dropdown tanpa sentuh frontend
+- Label auto-format dari tool name (`manage_task` → `Manage Task`); override manual hanya untuk static tools via `STATIC_LABELS`
+
+**Consequence:** Frontend butuh backend running untuk populate tool list. Jika backend unreachable saat mount, dropdown kosong tapi tidak crash.
+
+---
+
+## ADR-016 — manage_task sebagai Dummy Service untuk Testing (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** Ganti `crud_data` dengan `manage_task` — tool dengan 5 args termasuk nested array (`tags`) dan nested object (`metadata`), lengkap dengan UI standalone.
+
+**Reasoning:**
+- `crud_data` terlalu generic, tidak cover kasus nested array/object yang perlu ditest untuk approval card
+- `manage_task` sengaja dirancang untuk cover semua edge case: multiple args, `list[str]`, nested dict, dan CRUD operations
+- UI (`/ui`) di dummy service memudahkan demo presentasi — real-time update saat agent create/update/delete task
+
+**Implementation:**
+- `dummy_services/routes/tasks.py`: in-memory `_tasks: dict[str, dict]`
+- `dummy_services/static/index.html`: polling `GET /tasks` tiap 2s, toggle pause/resume
+- Gemini mensyaratkan array field harus punya `items` — di-handle di `microservice.py` via typed `list[str]` Pydantic field
+
+---
+
 ## ADR-014 — [GENERAL_KNOWLEDGE] Marker di LLM Response (2026-03-24)
 
 **Status:** Accepted

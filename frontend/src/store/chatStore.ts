@@ -1,7 +1,12 @@
 import { create } from 'zustand'
 import type { DisplayMessage } from '../components/ChatWindow'
 
-const ALL_TOOLS = ['search_knowledge', 'search_web', 'send_notification', 'get_random_number', 'crud_data']
+// Populated at runtime from GET /api/v1/chat/tools — never hardcoded
+let ALL_TOOLS: string[] = []
+
+export function setAllTools(names: string[]) {
+  ALL_TOOLS = names
+}
 
 interface ChatStore {
   messages: DisplayMessage[]

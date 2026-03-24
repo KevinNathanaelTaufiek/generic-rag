@@ -1,24 +1,18 @@
 import { useState, useEffect, useRef } from 'react'
-import { sendMessage, approveToolCall } from '../api/chat'
+import { sendMessage, approveToolCall, fetchTools } from '../api/chat'
 import ChatWindow from '../components/ChatWindow'
 import type { DisplayMessage, AgentStep } from '../components/ChatWindow'
 import ChatInput from '../components/ChatInput'
-import { useChatStore, ALL_TOOLS } from '../store/chatStore'
+import { useChatStore, setAllTools } from '../store/chatStore'
 
-const TOOL_LABELS: Record<string, string> = {
+// Fallback display names for static tools not coming from microservices.json
+const STATIC_LABELS: Record<string, string> = {
   search_knowledge: 'Knowledge Base',
   search_web: 'Search Web',
-  send_notification: 'Send Notification',
-  get_random_number: 'Random Number',
-  crud_data: 'CRUD Data',
 }
 
-const TOOL_DESCRIPTIONS: Record<string, string> = {
-  search_knowledge: 'Cari jawaban dari dokumen yang sudah ditambahkan ke knowledge base.',
-  search_web: 'Cari informasi dari internet jika tidak ada di knowledge base.',
-  send_notification: 'Kirim notifikasi atau pesan ke penerima.',
-  get_random_number: 'Generate angka acak dalam rentang tertentu.',
-  crud_data: 'Buat, baca, update, atau hapus data di sistem eksternal.',
+function toLabel(name: string): string {
+  return STATIC_LABELS[name] ?? name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
 export default function ChatPage() {
@@ -33,9 +27,23 @@ export default function ChatPage() {
     currentUsername, setMessagesForUser,
   } = useChatStore()
 
+  const [toolInfos, setToolInfos] = useState<{ name: string; description: string }[]>([])
   const [showToolMenu, setShowToolMenu] = useState(false)
+  const [loadingStatus, setLoadingStatus] = useState<string>('')
+
+  // Fetch tool list from backend on mount
+  useEffect(() => {
+    fetchTools().then((tools) => {
+      setToolInfos(tools)
+      setAllTools(tools.map(t => t.name))
+    }).catch(() => {
+      // backend unreachable — leave toolInfos empty, store keeps its defaults
+    })
+  }, [])
   const toolMenuRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  // mutable ref for in-flight progress steps — avoids stale closure issues
+  const progressStepsRef = useRef<AgentStep[]>([])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -52,9 +60,35 @@ export default function ChatPage() {
     const userMsg: DisplayMessage = { role: 'user', content: text, timestamp: new Date().toISOString() }
     setMessagesForUser(owner, prev => [...prev, userMsg])
     setLoading(true)
+    setLoadingStatus('Thinking…')
+
+    // Use a unique ID to reliably find/update the placeholder message across multiple setState calls
+    const placeholderId = `ph-${Date.now()}`
+    setMessagesForUser(owner, prev => [...prev, { role: 'assistant', content: '', status: 'done', steps: [], _id: placeholderId } as DisplayMessage & { _id: string }])
+    progressStepsRef.current = []
 
     const controller = new AbortController()
     abortControllerRef.current = controller
+
+    function updatePlaceholderSteps(steps: AgentStep[]) {
+      setMessagesForUser(owner, prev => {
+        const idx = prev.findLastIndex(m => (m as DisplayMessage & { _id?: string })._id === placeholderId)
+        if (idx === -1) return prev
+        const updated = [...prev]
+        updated[idx] = { ...updated[idx], steps: [...steps] }
+        return updated
+      })
+    }
+
+    function replacePlaceholder(msg: DisplayMessage) {
+      setMessagesForUser(owner, prev => {
+        const idx = prev.findLastIndex(m => (m as DisplayMessage & { _id?: string })._id === placeholderId)
+        if (idx === -1) return [...prev, msg]
+        const updated = [...prev]
+        updated[idx] = msg
+        return updated
+      })
+    }
 
     try {
       const history = messages
@@ -67,39 +101,68 @@ export default function ChatPage() {
         history,
         strict_mode: strictMode,
         enabled_tools: enabledTools,
-      }, controller.signal)
+      }, controller.signal, (p) => {
+        setLoadingStatus(p.label)
+        const now = Date.now()
+        const steps = progressStepsRef.current
+        // Close previous active step with duration
+        const lastIdx = steps.findLastIndex(s => s.status === 'progress' && s.durationMs === undefined)
+        if (lastIdx !== -1) {
+          steps[lastIdx] = {
+            ...steps[lastIdx],
+            durationMs: now - (steps[lastIdx].startedAt ?? now),
+          }
+        }
+        // Push new active step
+        const newStep: AgentStep = { status: 'progress', tool_name: '', label: p.label, startedAt: now }
+        progressStepsRef.current = [...steps, newStep]
+        updatePlaceholderSteps(progressStepsRef.current)
+      })
+
+      // Close last active step on completion
+      const now = Date.now()
+      const finalSteps = progressStepsRef.current.map(s =>
+        s.status === 'progress' && s.durationMs === undefined
+          ? { ...s, durationMs: now - (s.startedAt ?? now) }
+          : s
+      )
+
       setSessionId(res.session_id)
 
       if (res.status === 'pending_tool_approval') {
-        const steps: AgentStep[] = res.pending_tool
+        const toolSteps: AgentStep[] = res.pending_tool
           ? [{ status: 'tool_requested', tool_name: res.pending_tool.tool_name, description: res.pending_tool.description }]
           : []
-        setMessagesForUser(owner, prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: '',
-            status: 'pending_tool_approval',
-            pending_tool: res.pending_tool,
-            thread_id: res.thread_id,
-            steps,
-          },
-        ])
+        replacePlaceholder({
+          role: 'assistant',
+          content: '',
+          status: 'pending_tool_approval',
+          pending_tool: res.pending_tool,
+          thread_id: res.thread_id,
+          steps: [...finalSteps, ...toolSteps],
+        })
         setPendingApproval(true)
       } else {
-        setMessagesForUser(owner, prev => [
-          ...prev,
-          { role: 'assistant', content: res.answer, sources: res.sources, status: 'done', from_general_knowledge: res.from_general_knowledge, timestamp: new Date().toISOString() },
-        ])
+        replacePlaceholder({
+          role: 'assistant',
+          content: res.answer,
+          sources: res.sources,
+          status: 'done',
+          from_general_knowledge: res.from_general_knowledge,
+          timestamp: new Date().toISOString(),
+          steps: finalSteps,
+        })
       }
     } catch (err) {
-      if (err instanceof Error && err.name === 'CanceledError') return
-      setMessagesForUser(owner, prev => [
-        ...prev,
-        { role: 'assistant', content: 'Sorry, something went wrong. Please try again.' },
-      ])
+      if (err instanceof Error && (err.name === 'CanceledError' || err.name === 'AbortError')) {
+        setMessagesForUser(owner, prev => prev.filter(m => (m as DisplayMessage & { _id?: string })._id !== placeholderId))
+        return
+      }
+      replacePlaceholder({ role: 'assistant', content: 'Sorry, something went wrong. Please try again.' })
     } finally {
       setLoading(false)
+      setLoadingStatus('')
+      progressStepsRef.current = []
     }
   }
 
@@ -264,14 +327,14 @@ export default function ChatPage() {
               className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
                 enabledTools.length === 0
                   ? 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-700 text-red-500 dark:text-red-400'
-                  : enabledTools.length < ALL_TOOLS.length
+                  : enabledTools.length < toolInfos.length
                   ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-300 dark:border-amber-600 text-amber-700 dark:text-amber-400'
                   : 'bg-gray-50 dark:bg-slate-700 border-gray-200 dark:border-slate-600 text-gray-600 dark:text-slate-400'
               }`}
               onClick={() => setShowToolMenu(prev => !prev)}
               title="Toggle active tools"
             >
-              Tools {enabledTools.length}/{ALL_TOOLS.length}
+              Tools {enabledTools.length}/{toolInfos.length}
             </button>
             {showToolMenu && (
               <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg z-10 min-w-44">
@@ -282,17 +345,17 @@ export default function ChatPage() {
                     onClick={toggleAllTools}
                     disabled={strictMode}
                   >
-                    {enabledTools.length === ALL_TOOLS.length ? 'Disable all' : 'Enable all'}
+                    {enabledTools.length === toolInfos.length ? 'Disable all' : 'Enable all'}
                   </button>
                 </div>
-                {ALL_TOOLS.map(name => {
+                {toolInfos.map(({ name, description }) => {
                   const locked = strictMode && name === 'search_knowledge'
                   const disabledByStrict = strictMode && name !== 'search_knowledge'
                   return (
                     <label
                       key={name}
                       className={`flex items-center gap-2 px-3 py-2 ${disabledByStrict || locked ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50 dark:hover:bg-slate-700 cursor-pointer'}`}
-                      title={disabledByStrict ? 'Nonaktifkan strict mode untuk mengaktifkan tool ini.' : locked ? 'Terkunci saat strict mode aktif.' : TOOL_DESCRIPTIONS[name]}
+                      title={disabledByStrict ? 'Nonaktifkan strict mode untuk mengaktifkan tool ini.' : locked ? 'Terkunci saat strict mode aktif.' : description}
                     >
                       <input
                         type="checkbox"
@@ -301,7 +364,7 @@ export default function ChatPage() {
                         disabled={strictMode}
                         className="accent-indigo-600"
                       />
-                      <span className="text-sm text-gray-700 dark:text-slate-300">{TOOL_LABELS[name]}</span>
+                      <span className="text-sm text-gray-700 dark:text-slate-300">{toLabel(name)}</span>
                     </label>
                   )
                 })}
@@ -323,6 +386,7 @@ export default function ChatPage() {
         <ChatWindow
           messages={messages}
           loading={loading}
+          loadingStatus={loadingStatus}
           onApprove={handleApprove}
           onCancel={handleCancel}
         />

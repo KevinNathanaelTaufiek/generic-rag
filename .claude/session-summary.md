@@ -192,6 +192,48 @@ Navigasi frontend dimigrasi dari tab state (`useState<Tab>`) ke `react-router-do
 
 ---
 
+---
+
+## 16. Fix Audit "Edited" Badge
+
+Badge "edited" di audit trail muncul meski user tidak mengubah args — karena `changes` di-set ke `user_edited_args` apapun nilainya.
+
+**Fix:** `log_tool_approval()` bandingkan `user_edited_args` dengan `ai_suggested_args`. Set `changes=None` jika identik. Badge hanya muncul kalau user benar-benar mengubah sesuatu.
+
+---
+
+## 17. manage_task — Dummy Tool untuk Testing Nested Args
+
+Dibuat tool `manage_task` (menggantikan `crud_data`) khusus untuk testing:
+- **Multiple args:** 5 field sekaligus (`action`, `task_id`, `title`, `tags`, `metadata`)
+- **Nested array:** `tags: list[str]` → tampil sebagai textarea JSON di approval card
+- **Nested object:** `metadata: dict` → bisa edit `{"priority": 1, "due": "..."}` langsung
+- **CRUD:** action `create/update/delete/list` — efek terlihat langsung di UI
+
+**Task Manager UI** (`dummy_services/static/index.html`): auto-refresh tiap 2s, toggle Pause/Resume. Buka di `http://localhost:8001/ui`.
+
+---
+
+## 18. Fix Gemini: Array Field Harus Punya `items`
+
+Gemini API reject tool schema jika field `array` tidak punya `items`. Pydantic `list` tanpa type parameter → generate `{"type": "array"}` tanpa `items`.
+
+**Fix dua lapis:**
+1. `_json_schema_to_pydantic()`: pakai `list[str]`/`list[int]` sesuai `items.type` di schema → Pydantic generate schema valid
+2. `_ensure_array_items()`: safety net di constructor `MicroserviceTool` — auto-inject `items: {type: string}` kalau missing
+
+---
+
+## 19. Dynamic Tool Registry
+
+Tool list di frontend sebelumnya hardcode di 3 tempat. Kini:
+- Backend expose `GET /api/v1/chat/tools` — return semua tool dari registry
+- Frontend fetch on mount, populate dropdown otomatis
+- Label auto-format dari nama (`manage_task` → `Manage Task`)
+- Tambah tool baru di `microservices.json` → langsung muncul di UI tanpa sentuh frontend
+
+---
+
 ## Key Learnings
 
 1. **ReAct agent itu mahal** — setiap tool call = +1 LLM round-trip

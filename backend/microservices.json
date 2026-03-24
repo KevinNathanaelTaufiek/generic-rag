@@ -49,28 +49,40 @@
     "response_example": { "min": 1, "max": 50, "number": 23 }
   },
   {
-    "name": "crud_data",
-    "description": "Create, read, update, or delete data in an external system.",
-    "endpoint": "http://localhost:8001/data",
+    "name": "manage_task",
+    "description": "Create, update, delete, or list tasks in the task manager. Use action='create' to add a new task, 'update' to modify an existing one (requires task_id), 'delete' to remove a task (requires task_id), or 'list' to get all tasks.",
+    "endpoint": "http://localhost:8001/tasks/manage",
     "method": "POST",
     "args_schema": {
       "type": "object",
       "properties": {
-        "action":   { "type": "string", "enum": ["create", "read", "update", "delete"], "description": "Operation to perform", "x-param-style": "body" },
-        "resource": { "type": "string", "description": "Target resource name, e.g. 'users' or 'orders'", "x-param-style": "body" },
-        "data":     { "type": "object", "description": "Payload for create/update. Optional for read/delete.", "default": {}, "x-param-style": "body" }
+        "action":   { "type": "string",  "description": "Operation: create | update | delete | list", "x-param-style": "body" },
+        "task_id":  { "type": "string",  "description": "Task ID — required for update and delete", "x-param-style": "body" },
+        "title":    { "type": "string",  "description": "Task title — required for create, optional for update", "x-param-style": "body" },
+        "tags":     { "type": "array",   "items": { "type": "string" }, "description": "List of tags, e.g. [\"urgent\", \"backend\"]", "x-param-style": "body" },
+        "metadata": { "type": "object",  "description": "Extra info, e.g. {\"priority\": 1, \"due\": \"2026-03-30\"}", "x-param-style": "body" }
       },
-      "required": ["action", "resource"]
+      "required": ["action"]
     },
     "response_schema": {
       "type": "object",
       "properties": {
         "success": { "type": "boolean" },
-        "data":    { "type": "object" }
+        "action":  { "type": "string" },
+        "message": { "type": "string" }
       },
-      "required": ["success", "data"]
+      "required": ["success", "action", "message"]
     },
-    "args_example": { "action": "read", "resource": "users", "data": {} },
-    "response_example": { "success": true, "data": { "id": "123", "name": "John" } }
+    "args_example": {
+      "action": "create",
+      "title": "Fix login bug",
+      "tags": ["urgent", "backend"],
+      "metadata": { "priority": 1, "due": "2026-03-30" }
+    },
+    "response_example": {
+      "success": true,
+      "action": "create",
+      "message": "Task 'Fix login bug' created with ID abc12345."
+    }
   }
 ]

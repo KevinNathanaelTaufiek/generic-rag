@@ -3,10 +3,10 @@ import api from './client'
 export interface AuditRecord {
   id: number
   username: string
-  tool_name: string
-  ai_suggested_args: Record<string, unknown>
-  user_edited_args: Record<string, unknown> | null
-  result_status: 'approved' | 'rejected'
+  action: string
+  details: Record<string, unknown>
+  changes: Record<string, unknown> | null
+  status: string
   session_id: string
   thread_id: string
   timestamp: string
@@ -14,7 +14,7 @@ export interface AuditRecord {
 
 export interface AuditFilters {
   username?: string
-  tool_name?: string
+  action?: string
   date_from?: string
   date_to?: string
   limit?: number

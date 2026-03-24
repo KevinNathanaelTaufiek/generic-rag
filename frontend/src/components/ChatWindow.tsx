@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage, SourceRef, ToolCallInfo } from '../api/chat'
 
-export type StepStatus = 'tool_requested' | 'tool_approved' | 'tool_cancelled' | 'tool_executing' | 'tool_done'
+export type StepStatus =
+  | 'tool_requested' | 'tool_approved' | 'tool_cancelled' | 'tool_executing' | 'tool_done'
+  | 'progress'
 
 export interface AgentStep {
   status: StepStatus
   tool_name: string
   description?: string
   round?: number
+  // progress-specific fields
+  label?: string
+  durationMs?: number
+  startedAt?: number  // Date.now() when step started
 }
 
 export interface DisplayMessage extends ChatMessage {
@@ -23,6 +29,7 @@ export interface DisplayMessage extends ChatMessage {
 interface Props {
   messages: DisplayMessage[]
   loading: boolean
+  loadingStatus?: string
   onApprove?: (threadId: string, modifiedArgs: Record<string, unknown>) => void
   onCancel?: (threadId: string) => void
 }
@@ -57,26 +64,64 @@ function SourcesBlock({ sources }: { sources: SourceRef[] }) {
   )
 }
 
-const STEP_CONFIG: Record<StepStatus, { icon: string; label: string; color: string }> = {
+const TOOL_STEP_CONFIG: Record<Exclude<StepStatus, 'progress'>, { icon: string; label: string; color: string }> = {
   tool_requested: { icon: '🤔', label: 'LLM meminta tool', color: 'text-amber-600 dark:text-amber-400' },
-  tool_approved:  { icon: '✓',  label: 'Disetujui',         color: 'text-green-600 dark:text-green-400' },
-  tool_cancelled: { icon: '✗',  label: 'Dibatalkan',        color: 'text-red-500 dark:text-red-400' },
-  tool_executing: { icon: '⏳', label: 'Menjalankan tool',  color: 'text-blue-500 dark:text-blue-400' },
-  tool_done:      { icon: '✔',  label: 'Tool selesai',      color: 'text-gray-500 dark:text-slate-400' },
+  tool_approved:  { icon: '✓',  label: 'Disetujui',        color: 'text-green-600 dark:text-green-400' },
+  tool_cancelled: { icon: '✗',  label: 'Dibatalkan',       color: 'text-red-500 dark:text-red-400' },
+  tool_executing: { icon: '⏳', label: 'Menjalankan tool', color: 'text-blue-500 dark:text-blue-400' },
+  tool_done:      { icon: '✔',  label: 'Tool selesai',     color: 'text-gray-500 dark:text-slate-400' },
+}
+
+const PROGRESS_ICONS: Record<string, string> = {
+  'Thinking…': '💭',
+  'Searching knowledge base…': '🔍',
+  'Searching the web…': '🌐',
+  'Generating response…': '✍️',
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 }
 
 function AgentStepsLog({ steps }: { steps: AgentStep[] }) {
+  const progressSteps = steps.filter(s => s.status === 'progress')
+  const toolSteps = steps.filter(s => s.status !== 'progress')
+
   if (!steps.length) return null
+
+  const hasActiveStep = progressSteps.some(s => s.durationMs === undefined)
+
   return (
-    <details className="mb-3" open>
+    <details className="mb-3" open={hasActiveStep}>
       <summary className="cursor-pointer text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 select-none font-medium">
-        {steps.length} agent step{steps.length > 1 ? 's' : ''}
+        {steps.length} step{steps.length > 1 ? 's' : ''}
       </summary>
-      <ol className="mt-2 space-y-1 border-l-2 border-gray-100 dark:border-slate-600 pl-3">
-        {steps.map((step, i) => {
-          const cfg = STEP_CONFIG[step.status]
+      <ol className="mt-2 space-y-1.5 border-l-2 border-gray-100 dark:border-slate-600 pl-3">
+        {progressSteps.map((step, i) => {
+          const icon = PROGRESS_ICONS[step.label ?? ''] ?? '●'
+          const isActive = step.durationMs === undefined
+          const time = step.durationMs !== undefined ? formatDuration(step.durationMs) : null
           return (
-            <li key={i} className="text-xs">
+            <li key={`p-${i}`} className="text-xs flex items-center gap-1.5">
+              {isActive ? (
+                <span className="inline-block w-3 h-3 border-2 border-gray-300 dark:border-slate-500 border-t-indigo-500 dark:border-t-indigo-400 rounded-full animate-spin flex-shrink-0" />
+              ) : (
+                <span className="text-base leading-none">{icon}</span>
+              )}
+              <span className={isActive ? 'text-indigo-500 dark:text-indigo-400 animate-pulse' : 'text-gray-600 dark:text-slate-300'}>
+                {step.label}
+              </span>
+              {time && (
+                <span className="text-gray-400 dark:text-slate-500 ml-auto pl-2">· {time}</span>
+              )}
+            </li>
+          )
+        })}
+        {toolSteps.map((step, i) => {
+          const cfg = TOOL_STEP_CONFIG[step.status as Exclude<StepStatus, 'progress'>]
+          return (
+            <li key={`t-${i}`} className="text-xs">
               <span className={`font-medium ${cfg.color}`}>
                 {cfg.icon} {cfg.label}
               </span>
@@ -239,7 +284,7 @@ function ToolApprovalCard({
   )
 }
 
-export default function ChatWindow({ messages, loading, onApprove, onCancel }: Props) {
+export default function ChatWindow({ messages, loading, loadingStatus, onApprove, onCancel }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -276,6 +321,11 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
           )
         }
 
+        // Skip empty placeholder messages (no content and no steps yet)
+        if (msg.role === 'assistant' && !msg.content && (!msg.steps || msg.steps.length === 0)) {
+          return null
+        }
+
         const actor = msg.role === 'user' ? 'You' : 'Assistant'
         const timeLabel = msg.timestamp
           ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -299,7 +349,7 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
               {msg.role === 'assistant' && msg.steps && msg.steps.length > 0 && (
                 <AgentStepsLog steps={msg.steps} />
               )}
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+              {msg.content && <p className="whitespace-pre-wrap">{msg.content}</p>}
               {msg.role === 'assistant' && msg.from_general_knowledge && (
                 <p className="mt-2 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
                   <span>⚠</span> Jawaban dari general knowledge LLM, bukan dari knowledge base.
@@ -315,10 +365,11 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
       {loading && (
         <div className="flex justify-start">
           <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 px-4 py-3 shadow-sm">
-            <div className="flex gap-1 items-center h-4">
-              <span className="w-2 h-2 rounded-full bg-gray-300 dark:bg-slate-500 animate-bounce [animation-delay:0ms]" />
-              <span className="w-2 h-2 rounded-full bg-gray-300 dark:bg-slate-500 animate-bounce [animation-delay:150ms]" />
-              <span className="w-2 h-2 rounded-full bg-gray-300 dark:bg-slate-500 animate-bounce [animation-delay:300ms]" />
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-3.5 h-3.5 border-2 border-gray-300 dark:border-slate-500 border-t-indigo-500 dark:border-t-indigo-400 rounded-full animate-spin flex-shrink-0" />
+              <span className="text-sm text-gray-400 dark:text-slate-400 animate-pulse">
+                {loadingStatus || 'Thinking…'}
+              </span>
             </div>
           </div>
         </div>

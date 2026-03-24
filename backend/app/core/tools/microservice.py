@@ -39,6 +39,9 @@ def _json_schema_to_pydantic(schema: dict) -> type[BaseModel]:
     Supports: string, integer, number, boolean, object, array, enum (as str with validation).
     Optional fields (not in 'required') get a default of None.
     Fields with a 'default' value use that default.
+
+    For array fields, uses list[<item_type>] so LangChain generates a valid JSON Schema
+    with 'items' — required by Gemini.
     """
     properties: dict = schema.get("properties", {})
     required: list[str] = schema.get("required", [])
@@ -46,9 +49,14 @@ def _json_schema_to_pydantic(schema: dict) -> type[BaseModel]:
 
     for field_name, field_def in properties.items():
         raw_type = field_def.get("type", "string")
-        python_type = _TYPE_MAP.get(raw_type, str)
         has_default = "default" in field_def
         is_required = field_name in required
+
+        if raw_type == "array":
+            items_type = _TYPE_MAP.get(field_def.get("items", {}).get("type", "string"), str)
+            python_type: Any = list[items_type]  # type: ignore[valid-type]
+        else:
+            python_type = _TYPE_MAP.get(raw_type, str)
 
         if is_required:
             fields[field_name] = (python_type, ...)
@@ -58,6 +66,25 @@ def _json_schema_to_pydantic(schema: dict) -> type[BaseModel]:
             fields[field_name] = (python_type | None, None)
 
     return create_model("DynamicArgs", **fields)
+
+
+def _ensure_array_items(args_schema: dict) -> dict:
+    """
+    Gemini requires array fields to have an 'items' sub-schema.
+    Inject a default {type: string} if missing so the tool schema is valid.
+    Mutates a shallow copy — does not touch the original config dict.
+    """
+    props = args_schema.get("properties", {})
+    patched = False
+    new_props = {}
+    for name, field_def in props.items():
+        if field_def.get("type") == "array" and "items" not in field_def:
+            field_def = {**field_def, "items": {"type": "string"}}
+            patched = True
+        new_props[name] = field_def
+    if not patched:
+        return args_schema
+    return {**args_schema, "properties": new_props}
 
 
 def _is_complex_schema(args_schema: dict) -> bool:
@@ -109,8 +136,10 @@ class MicroserviceTool(BaseTool):
     """
 
     def __init__(self, config: dict) -> None:
-        self._config = config
-        self._args_model = _json_schema_to_pydantic(config["args_schema"])
+        # Patch array fields missing 'items' (required by Gemini)
+        patched_schema = _ensure_array_items(config["args_schema"])
+        self._config = {**config, "args_schema": patched_schema}
+        self._args_model = _json_schema_to_pydantic(patched_schema)
 
     @property
     def name(self) -> str:

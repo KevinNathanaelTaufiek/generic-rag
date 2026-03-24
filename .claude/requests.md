@@ -123,6 +123,46 @@ Berguna sebagai memori kontekstual untuk sesi-sesi Claude berikutnya.
 
 ---
 
+## [2026-03-24] Audit Trail Fix, manage_task Tool, Dynamic Tool Registry
+
+**Request:**
+> - Fix badge "edited" di audit trail yang muncul meski user tidak edit args
+> - Buat tool `manage_task` sebagai pengganti `crud_data` untuk testing multiple args, nested array, nested object
+> - Tool list di frontend diambil dari backend (dynamic), bukan hardcode
+> - Fix Gemini error: array field harus punya `items`
+
+**Perubahan yang dilakukan:**
+
+### Bug Fix — Audit "edited" badge
+- `services/audit.py`: `log_tool_approval()` hanya set `changes` jika `user_edited_args != ai_suggested_args`. Sebelumnya selalu di-set meskipun identik.
+
+### manage_task Tool
+- `dummy_services/routes/tasks.py`: route baru `POST /tasks/manage` (create/update/delete/list) + `GET /tasks` untuk UI polling. Menggantikan `data.py`.
+- `dummy_services/main.py`: swap `data` → `tasks`, tambah serve static (`/ui`, `/static`)
+- `dummy_services/static/index.html`: Task Manager UI standalone — auto-refresh tiap 2s dengan toggle Pause/Resume
+- `dummy_services/requirements.txt`: tambah `aiofiles`
+- `backend/microservices.json`: ganti `crud_data` → `manage_task` dengan 5 args (`action`, `task_id`, `title`, `tags: array`, `metadata: object`)
+
+### Dynamic Tool Registry
+- `backend/app/api/v1/chat.py`: tambah `GET /api/v1/chat/tools` — return semua tool dari registry (search_knowledge + search_web + microservices)
+- `frontend/src/api/chat.ts`: tambah `fetchTools()` + `ToolInfo` interface
+- `frontend/src/store/chatStore.ts`: `ALL_TOOLS` tidak lagi hardcode — diisi runtime via `setAllTools()`
+- `frontend/src/pages/ChatPage.tsx`: hapus `TOOL_LABELS`/`TOOL_DESCRIPTIONS` hardcode; fetch dari backend on mount; label auto-format via `toLabel()`
+
+### Fix Gemini Array Schema
+- `backend/app/core/tools/microservice.py`:
+  - `_json_schema_to_pydantic()`: array field kini pakai `list[<item_type>]` typed — LangChain generate schema dengan `items` field (required by Gemini)
+  - `_ensure_array_items()`: safety net — auto-inject `items: {type: string}` ke config jika missing
+- `backend/microservices.json`: tambah `"items": {"type": "string"}` di field `tags`
+
+**File baru:**
+- `dummy_services/routes/tasks.py`
+- `dummy_services/static/index.html`
+
+**ADR baru:** ADR-015 (dynamic tool registry), ADR-016 (manage_task dummy service)
+
+---
+
 ## Template untuk Request Berikutnya
 
 Saat menambahkan fitur baru, tambahkan entry di sini:

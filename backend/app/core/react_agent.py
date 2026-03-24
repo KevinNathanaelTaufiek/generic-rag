@@ -3,7 +3,8 @@ import time
 import asyncio
 import logging
 import json
-from typing import Annotated, Any, Optional
+from contextvars import ContextVar
+from typing import Annotated, Any, Callable, Optional
 
 from typing_extensions import TypedDict
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
@@ -18,6 +19,9 @@ from app.core.tools import get_tools, SEARCH_KNOWLEDGE_TOOL
 from app.schemas.chat import ToolCallInfo
 
 logger = logging.getLogger(__name__)
+
+# Per-request progress callback — set via contextvars so it's isolated per async task (per user/request)
+_current_progress_cb: ContextVar[Optional[Callable]] = ContextVar("_current_progress_cb", default=None)
 
 
 class AgentState(TypedDict):
@@ -155,7 +159,13 @@ async def agent_node(state: AgentState) -> AgentState:
     enabled_tools = state.get("enabled_tools") or []
     strict_mode = state.get("strict_mode", False)
     only_knowledge = "search_knowledge" in enabled_tools and not any(t != "search_knowledge" for t in enabled_tools)
+    # Per-request progress callback — injected by run_agent/resume_agent, never stored in state
+    _progress_cb = _current_progress_cb.get()
     logger.info("[agent] node started | strict=%s | tools=%s | only_knowledge=%s", strict_mode, enabled_tools, only_knowledge)
+
+    async def _emit(event: str, label: str):
+        if _progress_cb:
+            await _progress_cb({"event": event, "label": label})
 
     # --- Fast path: skip LLM #1 when only knowledge base is active ---
     # To re-enable: uncomment this block and comment out the ReAct path below
@@ -206,6 +216,7 @@ async def agent_node(state: AgentState) -> AgentState:
     messages = list(state["messages"])
     messages[0] = SystemMessage(content=_build_system_prompt(enabled_tools, strict_mode))
 
+    await _emit("thinking", "Thinking…")
     t1 = time.perf_counter()
     response = await llm_with_tools.ainvoke(messages)
     logger.info("[agent] LLM call #1 (decision) took %.2fs | tool_calls=%s", time.perf_counter() - t1, [tc["name"] for tc in response.tool_calls])
@@ -236,10 +247,17 @@ async def agent_node(state: AgentState) -> AgentState:
                 cancel_msg = HumanMessage(
                     content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
                 )
+                await _emit("generating", "Generating response…")
                 t3 = time.perf_counter()
                 clarification = await llm_with_tools.ainvoke(state["messages"] + [response, cancel_msg])
                 logger.info("[agent] LLM call #2 (cancel clarification) took %.2fs", time.perf_counter() - t3)
                 return {**state, "messages": [response, cancel_msg, clarification]}
+
+        _tool_labels = {
+            SEARCH_KNOWLEDGE_TOOL.name: "Searching knowledge base…",
+            "search_web": "Searching the web…",
+        }
+        await _emit("tool_executing", _tool_labels.get(tool_call["name"], f"Running {tool_call['name']}…"))
 
         tool = tool_map.get(tool_call["name"])
 
@@ -275,11 +293,13 @@ async def agent_node(state: AgentState) -> AgentState:
         # Loop: allow LLM to call additional tools (e.g. search_web after search_knowledge)
         MAX_TOOL_ROUNDS = 5
         for _round in range(MAX_TOOL_ROUNDS - 1):
+            await _emit("thinking", "Thinking…")
             t4 = time.perf_counter()
             follow_up = await llm_with_tools.ainvoke(accumulated_messages)
             logger.info("[agent] LLM call (round %d) took %.2fs | tool_calls=%s", _round + 2, time.perf_counter() - t4, [tc["name"] for tc in follow_up.tool_calls])
 
             if not follow_up.tool_calls:
+                await _emit("generating", "Generating response…")
                 accumulated_new.append(follow_up)
                 break
 
@@ -304,10 +324,12 @@ async def agent_node(state: AgentState) -> AgentState:
                     cancel_msg = HumanMessage(
                         content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
                     )
+                    await _emit("generating", "Generating response…")
                     clarification = await llm_with_tools.ainvoke(accumulated_messages + [follow_up, cancel_msg])
                     accumulated_new.extend([follow_up, cancel_msg, clarification])
                     break
 
+            await _emit("tool_executing", _tool_labels.get(next_tool_call["name"], f"Running {next_tool_call['name']}…"))
             next_tool = tool_map.get(next_tool_call["name"])
             if next_tool is None:
                 next_result = f"Error: Unknown tool '{next_tool_call['name']}'"
@@ -330,6 +352,7 @@ async def agent_node(state: AgentState) -> AgentState:
             accumulated_new.extend([follow_up, next_tool_message])
         else:
             # Hit MAX_TOOL_ROUNDS without a final answer — generate one
+            await _emit("generating", "Generating response…")
             t4 = time.perf_counter()
             follow_up = await llm_with_tools.ainvoke(accumulated_messages)
             logger.info("[agent] LLM final answer after max rounds took %.2fs", time.perf_counter() - t4)
@@ -345,6 +368,7 @@ async def agent_node(state: AgentState) -> AgentState:
         refusal = AIMessage(content="Maaf, saya tidak dapat menjawab pertanyaan ini. Tidak ada informasi yang relevan ditemukan di knowledge base.")
         return {**state, "messages": [refusal], "from_general_knowledge": False}
 
+    await _emit("generating", "Generating response…")
     logger.info("[agent] no tool call, direct answer from general knowledge | total %.2fs", time.perf_counter() - t0)
     return {**state, "messages": [response], "from_general_knowledge": True}
 
@@ -361,7 +385,7 @@ def _compile_graph():
 _agent_graph = _compile_graph()
 
 
-async def run_agent(message: str, history: list[dict], session_id: str, enabled_tools: list[str] | None = None, strict_mode: bool = False) -> dict[str, Any]:
+async def run_agent(message: str, history: list[dict], session_id: str, enabled_tools: list[str] | None = None, strict_mode: bool = False, progress_cb: Optional[Callable] = None) -> dict[str, Any]:
     """
     Start a new agent turn. Returns a dict with:
     - status: "done" | "pending_tool_approval"
@@ -384,10 +408,14 @@ async def run_agent(message: str, history: list[dict], session_id: str, enabled_
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    result = await _agent_graph.ainvoke(
-        {"messages": messages, "sources": [], "enabled_tools": enabled_tools or [], "strict_mode": strict_mode},
-        config,
-    )
+    token = _current_progress_cb.set(progress_cb)
+    try:
+        result = await _agent_graph.ainvoke(
+            {"messages": messages, "sources": [], "enabled_tools": enabled_tools or [], "strict_mode": strict_mode},
+            config,
+        )
+    finally:
+        _current_progress_cb.reset(token)
 
     # Check if graph was interrupted (tool approval needed)
     state_snapshot = _agent_graph.get_state(config)
@@ -448,7 +476,7 @@ def get_pending_info(thread_id: str) -> dict:
     return {}
 
 
-async def resume_agent(thread_id: str, approved: bool, session_id: str, modified_args: Optional[dict] = None) -> dict[str, Any]:
+async def resume_agent(thread_id: str, approved: bool, session_id: str, modified_args: Optional[dict] = None, progress_cb: Optional[Callable] = None) -> dict[str, Any]:
     """
     Resume a paused agent after user approves or cancels tool execution.
     Uses Command(resume=approved) — the interrupt() return value in agent_node will be `approved`.
@@ -467,7 +495,11 @@ async def resume_agent(thread_id: str, approved: bool, session_id: str, modified
     else:
         resume_value = approved
 
-    result = await _agent_graph.ainvoke(Command(resume=resume_value), config)
+    token = _current_progress_cb.set(progress_cb)
+    try:
+        result = await _agent_graph.ainvoke(Command(resume=resume_value), config)
+    finally:
+        _current_progress_cb.reset(token)
 
     # Check if interrupted again (another tool call)
     state_snapshot = _agent_graph.get_state(config)

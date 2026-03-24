@@ -11,7 +11,7 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 @router.get("")
 def list_audit(
     username: Optional[str] = Query(None),
-    tool_name: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
     date_from: Optional[datetime] = Query(None),
     date_to: Optional[datetime] = Query(None),
     limit: int = Query(100, ge=1, le=500),
@@ -19,7 +19,7 @@ def list_audit(
 ):
     records = get_audit_records(
         username=username,
-        tool_name=tool_name,
+        action=action,
         date_from=date_from,
         date_to=date_to,
         limit=limit,

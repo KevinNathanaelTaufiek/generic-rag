@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, create_engine
+from sqlalchemy import Column, DateTime, Integer, JSON, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DATABASE_URL = "sqlite:///./data/audit.db"
@@ -13,18 +13,28 @@ class Base(DeclarativeBase):
     pass
 
 
-class ToolAuditRecord(Base):
-    __tablename__ = "tool_audit"
+class AuditRecord(Base):
+    __tablename__ = "audit"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String, nullable=False, index=True)
-    tool_name = Column(String, nullable=False, index=True)
-    ai_suggested_args = Column(JSON, nullable=False)
-    user_edited_args = Column(JSON, nullable=True)   # None if user didn't edit
-    result_status = Column(String, nullable=False)   # "approved" | "rejected"
+    action = Column(String, nullable=False, index=True)   # tool name OR "knowledge.add" | "knowledge.delete"
+    details = Column(JSON, nullable=False)                # tool args OR doc metadata
+    changes = Column(JSON, nullable=True)                 # user-edited args (tool calls only)
+    status = Column(String, nullable=False)               # "approved" | "rejected" | "completed"
     session_id = Column(String, nullable=False)
     thread_id = Column(String, nullable=False)
     timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class KnowledgeContent(Base):
+    __tablename__ = "knowledge_content"
+
+    doc_id = Column(String, primary_key=True)
+    title = Column(String, nullable=False)
+    source_type = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(String, nullable=False)
 
 
 def create_db() -> None:

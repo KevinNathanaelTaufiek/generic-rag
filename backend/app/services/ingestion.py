@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime, timezone
-from typing import BinaryIO
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -43,38 +42,33 @@ def ingest_text(content: str, title: str | None = None) -> dict:
     docs = [Document(page_content=content, metadata={})]
     chunk_count = _ingest_documents(docs, doc_id, title, "text")
 
-    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count}
+    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count, "content": content}
 
 
-def ingest_pdf(file: BinaryIO, filename: str) -> dict:
-    from pypdf import PdfReader
+def extract_file(content: bytes, filename: str) -> tuple[str, str, str]:
+    """Extract (text, title, source_type) from raw file bytes without ingesting."""
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(content))
+        text = "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if not text:
+            raise ValueError("No extractable text found in PDF.")
+        return text, filename.removesuffix(".pdf"), "pdf"
+    else:
+        return content.decode("utf-8", errors="replace"), filename.rsplit(".", 1)[0], "file"
+
+
+def ingest_file(content: bytes, filename: str) -> dict:
+    """Ingest any supported file type (PDF, TXT, MD) from raw bytes."""
+    text, title, source_type = extract_file(content, filename)
 
     doc_id = str(uuid.uuid4())
-    title = filename.removesuffix(".pdf")
-
-    reader = PdfReader(file)
-    full_text = "\n\n".join(
-        page.extract_text() or "" for page in reader.pages
-    ).strip()
-
-    if not full_text:
-        raise ValueError("No extractable text found in PDF.")
-
-    docs = [Document(page_content=full_text, metadata={})]
-    chunk_count = _ingest_documents(docs, doc_id, title, "pdf")
-
-    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count}
-
-
-def ingest_text_file(content: bytes, filename: str) -> dict:
-    doc_id = str(uuid.uuid4())
-    title = filename.rsplit(".", 1)[0]
-
-    text = content.decode("utf-8", errors="replace")
     docs = [Document(page_content=text, metadata={})]
-    chunk_count = _ingest_documents(docs, doc_id, title, "file")
+    chunk_count = _ingest_documents(docs, doc_id, title, source_type)
 
-    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count}
+    return {"doc_id": doc_id, "title": title, "source_type": source_type, "chunk_count": chunk_count, "content": text}
 
 
 def reindex_all() -> int:
