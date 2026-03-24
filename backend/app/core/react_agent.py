@@ -3,7 +3,7 @@ import time
 import asyncio
 import logging
 import json
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 from typing_extensions import TypedDict
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
@@ -14,7 +14,7 @@ from langgraph.types import interrupt, Command
 
 from app.config import settings
 from app.core.llm import get_llm
-from app.core.tools import TOOLS, get_tools, SEARCH_KNOWLEDGE_TOOL
+from app.core.tools import get_tools, SEARCH_KNOWLEDGE_TOOL
 from app.schemas.chat import ToolCallInfo
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class AgentState(TypedDict):
     sources: list[dict]
     enabled_tools: list[str]
     strict_mode: bool
+    from_general_knowledge: bool
 
 
 # Shared MemorySaver — persists for the process lifetime (in-memory, MVP only)
@@ -60,17 +61,10 @@ def _extract_text(content) -> str:
 
 
 def _build_description(tool_name: str, tool_args: dict) -> str:
-    if tool_name == "search_knowledge":
-        return f"Searching knowledge base for: \"{tool_args.get('query', '')}\""
-    if tool_name == "search_web":
-        return f"Searching web for: \"{tool_args.get('query', '')}\""
-    if tool_name == "send_notification":
-        return f"Sending notification to '{tool_args.get('to', '')}': {tool_args.get('message', '')}"
-    if tool_name == "crud_data":
-        return f"Performing '{tool_args.get('action', '')}' on resource '{tool_args.get('resource', '')}'"
-    if tool_name == "get_random_number":
-        return f"Generating random number between {tool_args.get('min', 1)} and {tool_args.get('max', 100)}"
-    return f"Calling {tool_name} with args {tool_args}"
+    if not tool_args:
+        return f"Calling {tool_name}"
+    args_str = ", ".join(f"{k}={repr(v)}" for k, v in tool_args.items())
+    return f"{tool_name}({args_str})"
 
 
 def _build_system_prompt(enabled_tools: list[str] | None, strict_mode: bool = False) -> str:
@@ -81,31 +75,41 @@ def _build_system_prompt(enabled_tools: list[str] | None, strict_mode: bool = Fa
         return (
             "You are a helpful assistant. Answer the user's question based ONLY on the knowledge base. "
             "Always call `search_knowledge` to retrieve relevant information before answering. "
-            "If the knowledge base does not contain enough information to answer, say so clearly. "
-            "Do NOT use general knowledge or make up information."
+            "If the user's question covers multiple distinct topics, call `search_knowledge` once per topic and collect ALL results before composing your answer. "
+            "After getting results: answer ONLY the parts of the question that are explicitly covered in the knowledge base results. "
+            "For parts of the question NOT found in the knowledge base, clearly state that specific information is not available — but still answer the parts that ARE found. "
+            "Do NOT use general knowledge or make up information for any part of your answer."
         )
     if has_knowledge and has_other_tools:
         return (
             "You are a helpful assistant with access to a knowledge base and other tools. "
             "IMPORTANT: Always call the `search_knowledge` tool FIRST for any question or task. "
+            "If the user's question covers multiple distinct topics, call `search_knowledge` once per topic and collect ALL results before composing your answer. "
             "Use the knowledge base results as your primary source of information. "
-            "Only use other tools if the knowledge base does not contain sufficient information. "
-            "When tool results are available, use them directly to answer — do not say you cannot answer."
+            "Use other tools if the knowledge base does not contain sufficient information. "
+            "When tool results are available, use them directly to answer — do not say you cannot answer. "
+            "If your answer is based entirely on your own training knowledge (not from any tool result), start your response with the exact token [GENERAL_KNOWLEDGE] on its own line."
         )
     if has_knowledge:
         return (
             "You are a helpful assistant. Always call `search_knowledge` first to retrieve relevant information. "
+            "If the user's question covers multiple distinct topics, call `search_knowledge` once per topic and collect ALL results before composing your answer. "
             "Use the knowledge base as your primary source. "
-            "If the knowledge base returns no relevant results, do NOT call any tool again — "
-            "answer directly from your own training knowledge and clearly state the answer is not from the knowledge base."
+            "If the knowledge base returns no relevant results, do NOT call `search_knowledge` tool again — instead "
+            "use your own training knowledge to answer. "
+            "If your answer is based entirely on your own training knowledge (not from any tool result), start your response with the exact token [GENERAL_KNOWLEDGE] on its own line."
         )
     if has_other_tools:
         return (
             "You are a helpful assistant with access to tools. "
             "When a tool returns results, use those results directly to answer the user. "
-            "Do not say you cannot answer if tool results are available."
+            "Use the tool results as your primary source. "
+            "If your answer is based entirely on your own training knowledge (not from any tool result), start your response with the exact token [GENERAL_KNOWLEDGE] on its own line."
         )
-    return "You are a helpful assistant. Answer the user's question to the best of your ability."
+    return (
+        "You are a helpful assistant. Answer the user's question to the best of your ability. "
+        "Since you have no tools available, start your response with the exact token [GENERAL_KNOWLEDGE] on its own line."
+    )
 
 
 def _extract_sources_from_web_result(result_str: str) -> list[dict]:
@@ -211,6 +215,8 @@ async def agent_node(state: AgentState) -> AgentState:
         tool_map = {t.name: t for t in active_tools}
 
         # search_knowledge executes automatically — no approval needed
+        effective_args = tool_call["args"]
+
         if tool_call["name"] != SEARCH_KNOWLEDGE_TOOL.name:
             pending_info = {
                 "id": tool_call["id"],
@@ -218,9 +224,15 @@ async def agent_node(state: AgentState) -> AgentState:
                 "tool_args": tool_call["args"],
             }
 
-            approved: bool = interrupt(pending_info)
+            approval_result = interrupt(pending_info)
 
-            if not approved:
+            if isinstance(approval_result, dict):
+                is_approved = approval_result.get("approved", False)
+                effective_args = approval_result.get("modified_args") or tool_call["args"]
+            else:
+                is_approved = bool(approval_result)
+
+            if not is_approved:
                 cancel_msg = HumanMessage(
                     content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
                 )
@@ -236,7 +248,7 @@ async def agent_node(state: AgentState) -> AgentState:
         else:
             try:
                 t3 = time.perf_counter()
-                result_str = await tool.ainvoke(tool_call["args"])
+                result_str = await tool.ainvoke(effective_args)
                 logger.info("[agent] tool '%s' took %.2fs | result_len=%d", tool_call["name"], time.perf_counter() - t3, len(result_str))
             except Exception as e:
                 result_str = f"Error: Tool execution failed — {str(e)}"
@@ -246,7 +258,13 @@ async def agent_node(state: AgentState) -> AgentState:
 
         sources = list(state.get("sources") or [])
         if tool_call["name"] == SEARCH_KNOWLEDGE_TOOL.name:
-            sources = sources + _extract_sources_from_tool_result(result_str)
+            new_sources = _extract_sources_from_tool_result(result_str)
+            sources = sources + new_sources
+            # Strict mode: refuse immediately if knowledge base has no results
+            if strict_mode and not new_sources:
+                logger.info("[agent] strict mode: search_knowledge returned no results, refusing answer")
+                refusal = AIMessage(content="Maaf, informasi tersebut tidak ditemukan di knowledge base. Saya tidak dapat menjawab pertanyaan ini berdasarkan sumber yang tersedia.")
+                return {**state, "messages": [response, tool_message, refusal], "sources": [], "from_general_knowledge": False}
         elif tool_call["name"] == "search_web":
             sources = sources + _extract_sources_from_web_result(result_str)
 
@@ -268,14 +286,21 @@ async def agent_node(state: AgentState) -> AgentState:
             next_tool_call = follow_up.tool_calls[0]
 
             # Approval gate for non-knowledge tools
+            next_effective_args = next_tool_call["args"]
             if next_tool_call["name"] != SEARCH_KNOWLEDGE_TOOL.name:
                 pending_info = {
                     "id": next_tool_call["id"],
                     "tool_name": next_tool_call["name"],
                     "tool_args": next_tool_call["args"],
                 }
-                approved: bool = interrupt(pending_info)
-                if not approved:
+                next_approval_result = interrupt(pending_info)
+                if isinstance(next_approval_result, dict):
+                    next_is_approved = next_approval_result.get("approved", False)
+                    next_effective_args = next_approval_result.get("modified_args") or next_tool_call["args"]
+                else:
+                    next_is_approved = bool(next_approval_result)
+
+                if not next_is_approved:
                     cancel_msg = HumanMessage(
                         content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
                     )
@@ -289,7 +314,7 @@ async def agent_node(state: AgentState) -> AgentState:
             else:
                 try:
                     t5 = time.perf_counter()
-                    next_result = await next_tool.ainvoke(next_tool_call["args"])
+                    next_result = await next_tool.ainvoke(next_effective_args)
                     logger.info("[agent] tool '%s' took %.2fs | result_len=%d", next_tool_call["name"], time.perf_counter() - t5, len(next_result))
                 except Exception as e:
                     next_result = f"Error: Tool execution failed — {str(e)}"
@@ -311,11 +336,17 @@ async def agent_node(state: AgentState) -> AgentState:
             accumulated_new.append(follow_up)
 
         logger.info("[agent] total node time %.2fs", time.perf_counter() - t0)
-        return {**state, "messages": accumulated_new, "sources": sources}
+        return {**state, "messages": accumulated_new, "sources": sources, "from_general_knowledge": False}
 
     # No tool call — direct answer
-    logger.info("[agent] no tool call, direct answer | total %.2fs", time.perf_counter() - t0)
-    return {**state, "messages": [response]}
+    # In strict mode, LLM must always call search_knowledge first
+    if strict_mode and "search_knowledge" in enabled_tools:
+        logger.info("[agent] strict mode: LLM skipped tool call, refusing direct answer")
+        refusal = AIMessage(content="Maaf, saya tidak dapat menjawab pertanyaan ini. Tidak ada informasi yang relevan ditemukan di knowledge base.")
+        return {**state, "messages": [refusal], "from_general_knowledge": False}
+
+    logger.info("[agent] no tool call, direct answer from general knowledge | total %.2fs", time.perf_counter() - t0)
+    return {**state, "messages": [response], "from_general_knowledge": True}
 
 
 def _compile_graph():
@@ -389,19 +420,35 @@ async def run_agent(message: str, history: list[dict], session_id: str, enabled_
     final_message = result["messages"][-1]
     answer = _extract_text(final_message.content) if hasattr(final_message, "content") else str(final_message)
 
+    # Check marker before stripping — LLM explicitly signals general knowledge usage
+    from_general_knowledge = "[GENERAL_KNOWLEDGE]" in answer
+    answer = answer.replace("[GENERAL_KNOWLEDGE]", "").lstrip("\n").strip()
+
+    sources = result.get("sources", [])
+
     _memory.delete_thread(thread_id)
 
     return {
         "status": "done",
         "answer": answer,
-        "sources": result.get("sources", []),
+        "sources": sources,
+        "from_general_knowledge": from_general_knowledge,
         "thread_id": None,
         "pending_tool": None,
         "session_id": session_id,
     }
 
 
-async def resume_agent(thread_id: str, approved: bool, session_id: str) -> dict[str, Any]:
+def get_pending_info(thread_id: str) -> dict:
+    """Return the pending interrupt payload for a paused thread (for audit logging)."""
+    config = {"configurable": {"thread_id": thread_id}}
+    state_snapshot = _agent_graph.get_state(config)
+    if state_snapshot.tasks and state_snapshot.tasks[0].interrupts:
+        return state_snapshot.tasks[0].interrupts[0].value
+    return {}
+
+
+async def resume_agent(thread_id: str, approved: bool, session_id: str, modified_args: Optional[dict] = None) -> dict[str, Any]:
     """
     Resume a paused agent after user approves or cancels tool execution.
     Uses Command(resume=approved) — the interrupt() return value in agent_node will be `approved`.
@@ -414,8 +461,13 @@ async def resume_agent(thread_id: str, approved: bool, session_id: str) -> dict[
     if not state_snapshot.next:
         raise ValueError(f"No pending approval found for thread_id={thread_id}")
 
-    # Resume: Command(resume=approved) is passed back as the return value of interrupt()
-    result = await _agent_graph.ainvoke(Command(resume=approved), config)
+    # Resume: build resume value — dict if user edited args, bool otherwise
+    if approved and modified_args:
+        resume_value: bool | dict = {"approved": True, "modified_args": modified_args}
+    else:
+        resume_value = approved
+
+    result = await _agent_graph.ainvoke(Command(resume=resume_value), config)
 
     # Check if interrupted again (another tool call)
     state_snapshot = _agent_graph.get_state(config)
@@ -444,12 +496,17 @@ async def resume_agent(thread_id: str, approved: bool, session_id: str) -> dict[
     final_message = result["messages"][-1]
     answer = _extract_text(final_message.content) if hasattr(final_message, "content") else str(final_message)
 
+    answer = answer.replace("[GENERAL_KNOWLEDGE]", "").lstrip("\n").strip()
+    sources_list = result.get("sources", [])
+    from_general_knowledge = len(sources_list) == 0 and bool(answer) and not answer.startswith("Maaf,")
+
     _memory.delete_thread(thread_id)
 
     return {
         "status": "done",
         "answer": answer,
-        "sources": result.get("sources", []),
+        "sources": sources_list,
+        "from_general_knowledge": from_general_knowledge,
         "thread_id": None,
         "pending_tool": None,
         "session_id": session_id,

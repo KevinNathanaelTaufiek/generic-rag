@@ -35,12 +35,14 @@ class ChatResponse(BaseModel):
     status: Literal["done", "pending_tool_approval"] = "done"
     pending_tool: Optional[ToolCallInfo] = None
     thread_id: Optional[str] = None
+    from_general_knowledge: bool = False
 
 
 class ToolApprovalRequest(BaseModel):
     thread_id: str
     session_id: str
     approved: bool
+    modified_args: Optional[dict] = None  # user-edited args, None if unchanged
 
 
 class ToolApprovalResponse(BaseModel):
@@ -50,3 +52,4 @@ class ToolApprovalResponse(BaseModel):
     status: Literal["done", "pending_tool_approval"] = "done"
     pending_tool: Optional[ToolCallInfo] = None
     thread_id: Optional[str] = None
+    from_general_knowledge: bool = False

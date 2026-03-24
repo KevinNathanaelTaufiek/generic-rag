@@ -113,3 +113,85 @@ Dokumen ini mencatat keputusan arsitektur beserta alasannya.
 **Decision:** Migrasi dari tab state (`useState`) ke `react-router-dom` `<Routes>`.
 
 **Reasoning:** Mendukung deep linking, browser history navigation, dan persiapan untuk penambahan halaman baru di masa depan. State chat di-lift ke `AppInner` agar persist saat navigasi antar halaman.
+
+---
+
+## ADR-010 — SQLite untuk Audit Trail (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** Audit log tool approvals disimpan ke SQLite (`data/audit.db`) via SQLAlchemy, bukan in-memory atau file log biasa.
+
+**Reasoning:**
+- Perlu query/filter per user, tool name, dan date range — lebih mudah dengan SQL
+- SQLite tidak butuh service eksternal (sesuai prinsip MVP lokal)
+- Schema sederhana: satu tabel `tool_audit` dengan kolom username, tool_name, ai_suggested_args, user_edited_args, result_status, session_id, thread_id, timestamp
+- Mudah migrasi ke PostgreSQL di masa depan jika perlu (tinggal ganti `DATABASE_URL`)
+
+**Consequence:** Backend butuh folder `data/` saat startup. `create_db()` dipanggil di `@app.on_event("startup")`.
+
+---
+
+## ADR-011 — User Identity via X-Username Header (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** Identity user dikirim sebagai HTTP header `X-Username` dari frontend, bukan via auth token/session.
+
+**Reasoning:**
+- MVP tidak ada auth — tidak perlu JWT/OAuth
+- User dipilih dari `predefined_users` list di config (alice, bob, charlie)
+- Frontend simpan pilihan di `localStorage` dan inject via axios interceptor
+- Cukup untuk audit trail per user tanpa kerumitan auth
+
+**Trade-off:** Tidak ada enkripsi/validasi identity — user bisa kirim username apapun. Acceptable di MVP/demo. Untuk production, ganti dengan proper auth.
+
+---
+
+## ADR-012 — Zustand untuk Chat State (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** State chat (messages, sessionId, loading, tools, strictMode) dipindah dari `useState` di `ChatPage` ke Zustand store (`chatStore.ts`).
+
+**Reasoning:**
+- Multi-user switching perlu state per-user yang persist saat user switch
+- State sebelumnya di-lift ke `App.tsx` (props drilling) — tidak scalable
+- Zustand lebih ringan dari Redux, tidak butuh Provider wrapper
+- `userMessages: Record<string, DisplayMessage[]>` memungkinkan setiap user punya history chat terpisah
+
+**Consequence:** `ChatPage` tidak lagi menerima props — semua state dari store.
+
+---
+
+## ADR-013 — Tool Args Editable di Approval Card (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** Saat LLM request tool call, user bisa edit args sebelum approve — bukan hanya approve/reject binary.
+
+**Reasoning:**
+- Memberikan user kontrol lebih: bisa koreksi parameter yang salah tanpa reject dan kirim ulang pesan
+- Audit trail menyimpan `ai_suggested_args` vs `user_edited_args` untuk visibility gap antara AI intent dan user action
+
+**Implementation:** `ArgEditor` component di `ChatWindow.tsx` render input sesuai tipe data (string/number/boolean/object). `modified_args` dikirim ke `/chat/tool-approval`. Backend di `resume_agent()` build `resume_value` sebagai dict `{approved, modified_args}` jika ada edit.
+
+---
+
+## ADR-014 — [GENERAL_KNOWLEDGE] Marker di LLM Response (2026-03-24)
+
+**Status:** Accepted
+**Date:** 2026-03-24
+
+**Decision:** LLM diminta menambahkan token `[GENERAL_KNOWLEDGE]` di awal response jika jawaban berasal dari training knowledge (bukan tool result). Backend strip token ini dan set `from_general_knowledge: true` di response.
+
+**Reasoning:**
+- User perlu tahu apakah jawaban grounded di knowledge base atau hanya dari LLM training data
+- Frontend tampilkan warning badge "⚠ Jawaban dari general knowledge LLM" saat flag ini true
+- Lebih reliable daripada inferring dari sources list (sources bisa kosong karena berbagai alasan)
+
+**Trade-off:** LLM mungkin tidak selalu comply dengan instruksi marker. Fallback heuristic di `resume_agent()`: jika `sources == []` dan answer ada dan tidak dimulai "Maaf," → set `from_general_knowledge = True`.

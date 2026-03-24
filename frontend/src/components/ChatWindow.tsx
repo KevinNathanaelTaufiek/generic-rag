@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage, SourceRef, ToolCallInfo } from '../api/chat'
 
 export type StepStatus = 'tool_requested' | 'tool_approved' | 'tool_cancelled' | 'tool_executing' | 'tool_done'
@@ -16,12 +16,14 @@ export interface DisplayMessage extends ChatMessage {
   pending_tool?: ToolCallInfo
   thread_id?: string
   steps?: AgentStep[]
+  timestamp?: string
+  from_general_knowledge?: boolean
 }
 
 interface Props {
   messages: DisplayMessage[]
   loading: boolean
-  onApprove?: (threadId: string) => void
+  onApprove?: (threadId: string, modifiedArgs: Record<string, unknown>) => void
   onCancel?: (threadId: string) => void
 }
 
@@ -90,6 +92,74 @@ function AgentStepsLog({ steps }: { steps: AgentStep[] }) {
   )
 }
 
+function ArgEditor({
+  name,
+  value,
+  onChange,
+}: {
+  name: string
+  value: unknown
+  onChange: (v: unknown) => void
+}) {
+  const inputClass =
+    'w-full text-xs px-2 py-1 border border-amber-300 dark:border-amber-600 rounded bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-amber-400'
+
+  if (typeof value === 'boolean') {
+    return (
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={value}
+          onChange={(e) => onChange(e.target.checked)}
+          className="accent-amber-500"
+        />
+        <span className="text-xs text-gray-600 dark:text-gray-300">{name}</span>
+      </label>
+    )
+  }
+
+  if (typeof value === 'number') {
+    return (
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className={inputClass}
+        aria-label={name}
+      />
+    )
+  }
+
+  if (typeof value === 'object' || Array.isArray(value)) {
+    return (
+      <textarea
+        rows={3}
+        defaultValue={JSON.stringify(value, null, 2)}
+        onChange={(e) => {
+          try {
+            onChange(JSON.parse(e.target.value))
+          } catch {
+            // keep raw string so validation on submit catches it
+            onChange(e.target.value)
+          }
+        }}
+        className={`${inputClass} font-mono resize-y`}
+        aria-label={name}
+      />
+    )
+  }
+
+  return (
+    <input
+      type="text"
+      value={String(value)}
+      onChange={(e) => onChange(e.target.value)}
+      className={inputClass}
+      aria-label={name}
+    />
+  )
+}
+
 function ToolApprovalCard({
   pending_tool,
   thread_id,
@@ -98,17 +168,62 @@ function ToolApprovalCard({
 }: {
   pending_tool: ToolCallInfo
   thread_id: string
-  onApprove: (id: string) => void
+  onApprove: (id: string, modifiedArgs: Record<string, unknown>) => void
   onCancel: (id: string) => void
 }) {
+  const [editedArgs, setEditedArgs] = useState<Record<string, unknown>>(() => ({ ...pending_tool.tool_args }))
+  const [jsonError, setJsonError] = useState<string | null>(null)
+
+  function handleArgChange(key: string, val: unknown) {
+    setEditedArgs((prev) => ({ ...prev, [key]: val }))
+    setJsonError(null)
+  }
+
+  function handleApprove() {
+    // Validate any string values that should be JSON (e.g. object fields)
+    for (const [key, val] of Object.entries(editedArgs)) {
+      if (typeof val === 'string' && typeof pending_tool.tool_args[key] === 'object') {
+        try {
+          JSON.parse(val)
+        } catch {
+          setJsonError(`"${key}" contains invalid JSON`)
+          return
+        }
+      }
+    }
+    onApprove(thread_id, editedArgs)
+  }
+
+  const argEntries = Object.entries(pending_tool.tool_args)
+
   return (
     <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-4 py-3 text-sm shadow-sm max-w-[75%]">
       <p className="font-semibold text-amber-800 dark:text-amber-300 mb-1">🔧 System wants to run a tool:</p>
       <p className="font-mono text-amber-900 dark:text-amber-200 text-xs mb-0.5">{pending_tool.tool_name}</p>
       <p className="text-amber-700 dark:text-amber-400 text-xs mb-3">→ {pending_tool.description}</p>
+
+      {argEntries.length > 0 && (
+        <div className="mb-3 space-y-2">
+          <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Parameters (editable):</p>
+          {argEntries.map(([key]) => (
+            <div key={key}>
+              <label className="block text-xs text-amber-600 dark:text-amber-500 mb-0.5 font-mono">{key}</label>
+              <ArgEditor
+                name={key}
+                value={editedArgs[key]}
+                onChange={(v) => handleArgChange(key, v)}
+              />
+            </div>
+          ))}
+          {jsonError && (
+            <p className="text-xs text-red-600 dark:text-red-400">{jsonError}</p>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2">
         <button
-          onClick={() => onApprove(thread_id)}
+          onClick={handleApprove}
           className="px-3 py-1.5 rounded-lg bg-green-600 dark:bg-green-700 text-white text-xs font-medium hover:bg-green-700 dark:hover:bg-green-600 cursor-pointer transition-colors"
         >
           ✓ Approve
@@ -156,15 +271,24 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
                 onApprove={onApprove ?? (() => {})}
                 onCancel={onCancel ?? (() => {})}
               />
+
             </div>
           )
         }
 
+        const actor = msg.role === 'user' ? 'You' : 'Assistant'
+        const timeLabel = msg.timestamp
+          ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : null
+
         return (
           <div
             key={i}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={`flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
           >
+            <span className="text-xs text-gray-400 dark:text-slate-500 px-1">
+              {actor}{timeLabel && ` · ${timeLabel}`}
+            </span>
             <div
               className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm ${
                 msg.role === 'user'
@@ -176,6 +300,11 @@ export default function ChatWindow({ messages, loading, onApprove, onCancel }: P
                 <AgentStepsLog steps={msg.steps} />
               )}
               <p className="whitespace-pre-wrap">{msg.content}</p>
+              {msg.role === 'assistant' && msg.from_general_knowledge && (
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <span>⚠</span> Jawaban dari general knowledge LLM, bukan dari knowledge base.
+                </p>
+              )}
               {msg.role === 'assistant' && msg.sources && (
                 <SourcesBlock sources={msg.sources} />
               )}

@@ -33,12 +33,14 @@ export interface ChatResponse {
   status: 'done' | 'pending_tool_approval'
   pending_tool?: ToolCallInfo
   thread_id?: string
+  from_general_knowledge?: boolean
 }
 
 export interface ToolApprovalRequest {
   thread_id: string
   session_id: string
   approved: boolean
+  modified_args?: Record<string, unknown>
 }
 
 export interface ToolApprovalResponse {
@@ -48,6 +50,7 @@ export interface ToolApprovalResponse {
   status: 'done' | 'pending_tool_approval'
   pending_tool?: ToolCallInfo
   thread_id?: string
+  from_general_knowledge?: boolean
 }
 
 export async function sendMessage(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {

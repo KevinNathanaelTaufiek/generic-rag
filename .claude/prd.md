@@ -64,6 +64,10 @@ DELETE /api/v1/knowledge/{doc_id}   Hapus dokumen
 POST   /api/v1/knowledge/reindex    Re-embed semua dokumen
 
 POST   /api/v1/chat                 Kirim pesan, dapat respons + sources
+POST   /api/v1/chat/tool-approval   Approve/reject (+ edit args) tool call yang pending
+
+GET    /api/v1/audit                List audit records (filter: username, tool_name, date range)
+GET    /api/v1/users                List predefined users
 ```
 
 ---
@@ -91,8 +95,21 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    sources: list[SourceRef]     # [{doc_id, title, excerpt}]
+    sources: list[SourceRef]          # [{doc_id, title, excerpt}]
     session_id: str
+    status: Literal["done", "pending_tool_approval"]
+    pending_tool: Optional[ToolCallInfo]
+    thread_id: Optional[str]
+    from_general_knowledge: bool      # True jika jawaban dari training LLM, bukan knowledge base
+
+# Audit
+class ToolAuditRecord:
+    username: str
+    tool_name: str
+    ai_suggested_args: dict
+    user_edited_args: Optional[dict]  # None jika tidak diedit
+    result_status: str                # "approved" | "rejected"
+    session_id, thread_id, timestamp
 ```
 
 ---
@@ -133,7 +150,7 @@ CHUNK_OVERLAP=50
 
 | Fitur Masa Depan       | Yang Sudah Disiapkan                                      |
 | ---------------------- | --------------------------------------------------------- |
-| Auth / multi-user      | `session_id` di schema, collection bisa di-namespace      |
+| Auth / multi-user      | User identity via `X-Username` header sudah ada; predefined_users config; tinggal tambah proper auth layer |
 | Provider baru          | Factory pattern di `llm.py` dan `embeddings.py`           |
 | Ganti embedding model  | `EMBEDDING_PROVIDER` di env + `/reindex` endpoint         |
 | Input format baru      | Tambah handler di `ingestion.py`                          |

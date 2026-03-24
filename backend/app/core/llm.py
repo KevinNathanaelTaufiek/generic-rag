@@ -13,7 +13,7 @@ def get_llm() -> BaseChatModel:
     if settings.llm_provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash", # "gemini-3-flash-preview",
             google_api_key=settings.google_api_key,
         )
 

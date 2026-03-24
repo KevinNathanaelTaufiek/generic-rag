@@ -1,16 +1,13 @@
-import { useState } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import KnowledgePage from './pages/KnowledgePage'
 import ChatPage from './pages/ChatPage'
+import AuditPage from './pages/AuditPage'
 import { ThemeProvider, useTheme } from './context/ThemeContext'
-import type { DisplayMessage } from './components/ChatWindow'
+import { UserProvider } from './context/UserContext'
+import { UserSwitcher } from './components/UserSwitcher'
 
 function AppInner() {
   const { theme, toggle } = useTheme()
-
-  // Chat state lifted here so it persists across navigation
-  const [messages, setMessages] = useState<DisplayMessage[]>([])
-  const [sessionId, setSessionId] = useState<string | undefined>()
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
@@ -43,7 +40,20 @@ function AppInner() {
           >
             Knowledge
           </NavLink>
-          <div className="ml-auto">
+          <NavLink
+            to="/audit"
+            className={({ isActive }) =>
+              `px-4 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                isActive
+                  ? 'bg-indigo-50 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300'
+                  : 'text-gray-500 dark:text-slate-400 hover:text-gray-800 dark:hover:text-slate-200'
+              }`
+            }
+          >
+            Audit
+          </NavLink>
+          <div className="ml-auto flex items-center gap-2">
+            <UserSwitcher />
             <button
               onClick={toggle}
               className="w-9 h-9 flex items-center justify-center rounded-lg text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
@@ -65,18 +75,9 @@ function AppInner() {
       </nav>
 
       <Routes>
-        <Route
-          path="/"
-          element={
-            <ChatPage
-              messages={messages}
-              setMessages={setMessages}
-              sessionId={sessionId}
-              setSessionId={setSessionId}
-            />
-          }
-        />
+        <Route path="/" element={<ChatPage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
+        <Route path="/audit" element={<AuditPage />} />
       </Routes>
     </div>
   )
@@ -85,7 +86,9 @@ function AppInner() {
 export default function App() {
   return (
     <ThemeProvider>
-      <AppInner />
+      <UserProvider>
+        <AppInner />
+      </UserProvider>
     </ThemeProvider>
   )
 }

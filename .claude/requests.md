@@ -59,6 +59,70 @@ Berguna sebagai memori kontekstual untuk sesi-sesi Claude berikutnya.
 
 ---
 
+## [2026-03-24] Multi-User, Audit Trail, Tool Args Editing, General Knowledge Flag
+
+**Request:**
+> Rangkum semua perubahan, update docs / .claude
+
+**Perubahan yang dilakukan:**
+
+### Backend
+- **User identity**: `X-Username` header di `/chat` dan `/chat/tool-approval` — audit per user tanpa auth
+- **Audit trail**: SQLite (`data/audit.db`) via SQLAlchemy — catat setiap tool approval/rejection dengan `ai_suggested_args` vs `user_edited_args`
+- **`GET /api/v1/audit`**: query audit log dengan filter username, tool_name, date range, pagination
+- **`GET /api/v1/users`**: return `predefined_users` dari config
+- **`modified_args` di tool approval**: user bisa edit args sebelum approve; `resume_agent()` pass ke `interrupt()` return value sebagai dict
+- **`get_pending_info()`**: helper untuk ambil interrupt payload sebelum resume (dibutuhkan untuk audit)
+- **`from_general_knowledge` flag**: backend detect `[GENERAL_KNOWLEDGE]` marker di LLM response; strip marker sebelum dikirim ke client
+- **`[GENERAL_KNOWLEDGE]` token di system prompt**: semua prompt variant instruksikan LLM untuk tambah token ini jika jawab dari training knowledge
+- **Strict mode improvement**: langsung refuse jika LLM skip tool call tanpa search_knowledge
+- **Multi-topic search**: system prompt update — instruksikan LLM call `search_knowledge` per topik, jawab bagian yang ditemukan
+- **`_build_description()`**: generalized menjadi `tool_name(args_str)` format instead of hardcoded per tool
+- **`AgentState`**: tambah field `from_general_knowledge: bool`
+- `config.py`: tambah `predefined_users: list[str]` setting
+
+### Frontend
+- **UserContext + UserSwitcher**: user picker popover di navbar — pilih dari predefined users, simpan ke localStorage
+- **Zustand store (`chatStore.ts`)**: migrasi chat state dari `useState`/props-drilling ke Zustand; per-user message history (`userMessages: Record<string, DisplayMessage[]>`)
+- **`ChatPage`**: tidak lagi terima props — semua state dari store; `setMessagesForUser()` untuk update per-user
+- **`AuditPage`**: tabel audit dengan filter username/tool/date, expand args diff (AI suggested vs user edited)
+- **`ArgEditor` component**: edit tool args di approval card sebelum approve — type-aware (string/number/boolean/object/array)
+- **`ToolApprovalCard`**: tampilkan editable args; `onApprove` sekarang pass `modifiedArgs`
+- **Message timestamp + actor label**: setiap bubble chat tampilkan "You · 12:34" / "Assistant · 12:34"
+- **`from_general_knowledge` warning badge**: warning ⚠ di bawah assistant message jika jawaban bukan dari knowledge base
+- **axios interceptor**: inject `X-Username` header dari localStorage di setiap request
+- **Routing**: tambah `/audit` route di `App.tsx`; chat state tidak lagi di-lift ke `App` (dipegang Zustand)
+
+**File baru:**
+- `backend/app/api/v1/audit.py`
+- `backend/app/api/v1/users.py`
+- `backend/app/db.py`
+- `backend/app/services/audit.py`
+- `frontend/src/api/audit.ts`
+- `frontend/src/api/users.ts`
+- `frontend/src/components/UserSwitcher.tsx`
+- `frontend/src/context/UserContext.tsx`
+- `frontend/src/pages/AuditPage.tsx`
+- `frontend/src/store/chatStore.ts`
+
+**File yang diubah:**
+- `backend/app/api/v1/chat.py` — X-Username header, audit logging, modified_args, from_general_knowledge
+- `backend/app/api/v1/router.py` — daftarkan audit + users router
+- `backend/app/config.py` — predefined_users setting
+- `backend/app/core/react_agent.py` — modified_args support, general_knowledge flag, strict mode, multi-topic prompt
+- `backend/app/main.py` — startup event: create_db()
+- `backend/app/schemas/chat.py` — from_general_knowledge field, modified_args field
+- `frontend/src/App.tsx` — UserProvider, UserSwitcher, /audit route, state tidak di-lift
+- `frontend/src/api/chat.ts` — from_general_knowledge, modified_args types
+- `frontend/src/api/client.ts` — X-Username interceptor
+- `frontend/src/components/ChatWindow.tsx` — ArgEditor, timestamp, actor label, general_knowledge badge
+- `frontend/src/pages/ChatPage.tsx` — Zustand store, setMessagesForUser, modifiedArgs di handleApprove
+- `.claude/decisions.md` — ADR-010 sampai ADR-014
+
+**ADR baru:** ADR-010 (SQLite audit), ADR-011 (X-Username header), ADR-012 (Zustand), ADR-013 (editable tool args), ADR-014 ([GENERAL_KNOWLEDGE] marker)
+
+---
+
 ## Template untuk Request Berikutnya
 
 Saat menambahkan fitur baru, tambahkan entry di sini:
