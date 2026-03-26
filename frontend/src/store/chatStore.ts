@@ -83,7 +83,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       enabledTools: state.enabledTools.length === ALL_TOOLS.length ? [] : [...ALL_TOOLS],
     })),
 
-  resetChat: () => set({ messages: [], sessionId: undefined, pendingApproval: false, loading: false }),
+  resetChat: () => set((state) => ({
+    messages: [],
+    sessionId: undefined,
+    pendingApproval: false,
+    loading: false,
+    userMessages: { ...state.userMessages, [state.currentUsername]: [] },
+  })),
 
   switchUser: (name: string) => {
     const { currentUsername, messages, userMessages } = get()
