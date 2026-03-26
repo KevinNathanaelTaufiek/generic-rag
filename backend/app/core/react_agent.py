@@ -167,6 +167,24 @@ async def agent_node(state: AgentState) -> AgentState:
         if _progress_cb:
             await _progress_cb({"event": event, "label": label})
 
+    async def _stream_llm(bound_llm, messages_arg) -> Any:
+        """Stream an LLM call, emit thinking/answer tokens, return accumulated response."""
+        full = None
+        async for chunk in bound_llm.astream(messages_arg):
+            full = chunk if full is None else full + chunk
+            # Multi-model safe: OpenAI returns str, Gemini returns list of blocks
+            if isinstance(chunk.content, str):
+                if chunk.content:
+                    await _emit("answer_token", chunk.content)
+            elif isinstance(chunk.content, list):
+                for block in chunk.content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "thinking" and block.get("thinking"):
+                            await _emit("thinking_token", block["thinking"])
+                        elif block.get("type") == "text" and block.get("text"):
+                            await _emit("answer_token", block["text"])
+        return full
+
     # --- Fast path: skip LLM #1 when only knowledge base is active ---
     # To re-enable: uncomment this block and comment out the ReAct path below
     # if only_knowledge or (strict_mode and "search_knowledge" in enabled_tools):
@@ -218,7 +236,7 @@ async def agent_node(state: AgentState) -> AgentState:
 
     await _emit("thinking", "Thinking…")
     t1 = time.perf_counter()
-    response = await llm_with_tools.ainvoke(messages)
+    response = await _stream_llm(llm_with_tools, messages)
     logger.info("[agent] LLM call #1 (decision) took %.2fs | tool_calls=%s", time.perf_counter() - t1, [tc["name"] for tc in response.tool_calls])
 
     if response.tool_calls:
@@ -249,7 +267,7 @@ async def agent_node(state: AgentState) -> AgentState:
                 )
                 await _emit("generating", "Generating response…")
                 t3 = time.perf_counter()
-                clarification = await llm_with_tools.ainvoke(state["messages"] + [response, cancel_msg])
+                clarification = await _stream_llm(llm_with_tools, state["messages"] + [response, cancel_msg])
                 logger.info("[agent] LLM call #2 (cancel clarification) took %.2fs", time.perf_counter() - t3)
                 return {**state, "messages": [response, cancel_msg, clarification]}
 
@@ -295,7 +313,7 @@ async def agent_node(state: AgentState) -> AgentState:
         for _round in range(MAX_TOOL_ROUNDS - 1):
             await _emit("thinking", "Thinking…")
             t4 = time.perf_counter()
-            follow_up = await llm_with_tools.ainvoke(accumulated_messages)
+            follow_up = await _stream_llm(llm_with_tools, accumulated_messages)
             logger.info("[agent] LLM call (round %d) took %.2fs | tool_calls=%s", _round + 2, time.perf_counter() - t4, [tc["name"] for tc in follow_up.tool_calls])
 
             if not follow_up.tool_calls:
@@ -325,7 +343,7 @@ async def agent_node(state: AgentState) -> AgentState:
                         content="User cancelled tool execution. Ask the user what went wrong or how it should be done differently."
                     )
                     await _emit("generating", "Generating response…")
-                    clarification = await llm_with_tools.ainvoke(accumulated_messages + [follow_up, cancel_msg])
+                    clarification = await _stream_llm(llm_with_tools, accumulated_messages + [follow_up, cancel_msg])
                     accumulated_new.extend([follow_up, cancel_msg, clarification])
                     break
 
@@ -354,7 +372,7 @@ async def agent_node(state: AgentState) -> AgentState:
             # Hit MAX_TOOL_ROUNDS without a final answer — generate one
             await _emit("generating", "Generating response…")
             t4 = time.perf_counter()
-            follow_up = await llm_with_tools.ainvoke(accumulated_messages)
+            follow_up = await _stream_llm(llm_with_tools, accumulated_messages)
             logger.info("[agent] LLM final answer after max rounds took %.2fs", time.perf_counter() - t4)
             accumulated_new.append(follow_up)
 
@@ -368,7 +386,6 @@ async def agent_node(state: AgentState) -> AgentState:
         refusal = AIMessage(content="Maaf, saya tidak dapat menjawab pertanyaan ini. Tidak ada informasi yang relevan ditemukan di knowledge base.")
         return {**state, "messages": [refusal], "from_general_knowledge": False}
 
-    await _emit("generating", "Generating response…")
     logger.info("[agent] no tool call, direct answer from general knowledge | total %.2fs", time.perf_counter() - t0)
     return {**state, "messages": [response], "from_general_knowledge": True}
 

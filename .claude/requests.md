@@ -163,6 +163,24 @@ Berguna sebagai memori kontekstual untuk sesi-sesi Claude berikutnya.
 
 ---
 
+## [2026-03-26] Stream Thinking Process & Stream Jawaban — ✅ Done
+
+**Request:**
+> Buat plan implementasi stream thinking process & stream jawaban agar tidak terkesan lambat secara UX.
+> Termasuk: tampilkan thinking tokens dari LLM #1 (decision) dan LLM #2 (answer generation), serta stream jawaban token by token.
+
+**Status:** ✅ Selesai diimplementasi (2026-03-26).
+
+**Implementasi:**
+- `react_agent.py`: helper `_stream_llm()`, semua `.ainvoke()` → `.astream()`, emit `thinking_token` + `answer_token` per chunk, multi-model safe
+- `llm.py`: `include_thoughts=True` di Gemini config (tidak tambah biaya)
+- `chat.ts`: tambah `thinking_token | answer_token` ke `ProgressEvent.event` union type
+- `ChatPage.tsx`: handle kedua event, live-update `thinkingText` dan `content` di placeholder
+- `ChatWindow.tsx`: field `thinkingText` di `DisplayMessage`, collapsible `<details>` thinking section (auto-open streaming, collapse saat done), spinner hide saat answer streaming aktif
+- Bonus: `ChatInput.tsx` auto-resize textarea via `useRef` + `useEffect`
+
+---
+
 ## Template untuk Request Berikutnya
 
 Saat menambahkan fitur baru, tambahkan entry di sini:

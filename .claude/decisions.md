@@ -217,6 +217,28 @@ Dokumen ini mencatat keputusan arsitektur beserta alasannya.
 
 ---
 
+## ADR-017 — Streaming LLM Responses + Thinking Tokens (2026-03-26)
+
+**Status:** Accepted
+**Date:** 2026-03-26
+
+**Decision:** Semua LLM call di `react_agent.py` diganti dari `.ainvoke()` ke `.astream()` via helper `_stream_llm()`. Backend emit event `thinking_token` dan `answer_token` per-chunk ke SSE stream. Frontend render jawaban token-by-token dan tampilkan thinking di collapsible `<details>`.
+
+**Reasoning:**
+- `.ainvoke()` blocking — user nunggu tanpa feedback sampai response penuh, terasa lambat
+- Streaming drastis mengurangi perceived latency; jawaban muncul incremental
+- Thinking tokens Gemini 2.5 bermanfaat untuk debugging & transparansi agent
+
+**Implementation:**
+- `_stream_llm()` multi-model safe: OpenAI returns `chunk.content: str`, Gemini returns `list[dict]` dengan `type: thinking/text`
+- `include_thoughts=True` di Gemini config — tidak menambah biaya (sudah di-charge by default di Gemini 2.5)
+- Frontend: `thinkingText` field di `DisplayMessage`, auto-collapse saat answer selesai, spinner hide saat `answer_token` aktif
+- `gemini-2.0-flash` tidak punya thinking — graceful degradation (section tidak muncul)
+
+**Trade-off:** Streaming sedikit lebih complex di accumulation logic, tapi toolcall detection tetap reliable karena `full + chunk` accumulation.
+
+---
+
 ## ADR-014 — [GENERAL_KNOWLEDGE] Marker di LLM Response (2026-03-24)
 
 **Status:** Accepted

@@ -24,6 +24,7 @@ export interface DisplayMessage extends ChatMessage {
   steps?: AgentStep[]
   timestamp?: string
   from_general_knowledge?: boolean
+  thinkingText?: string
 }
 
 interface Props {
@@ -321,8 +322,8 @@ export default function ChatWindow({ messages, loading, loadingStatus, onApprove
           )
         }
 
-        // Skip empty placeholder messages (no content and no steps yet)
-        if (msg.role === 'assistant' && !msg.content && (!msg.steps || msg.steps.length === 0)) {
+        // Skip empty placeholder messages (no content, no steps, no thinking yet)
+        if (msg.role === 'assistant' && !msg.content && !msg.thinkingText && (!msg.steps || msg.steps.length === 0)) {
           return null
         }
 
@@ -349,6 +350,16 @@ export default function ChatWindow({ messages, loading, loadingStatus, onApprove
               {msg.role === 'assistant' && msg.steps && msg.steps.length > 0 && (
                 <AgentStepsLog steps={msg.steps} />
               )}
+              {msg.role === 'assistant' && msg.thinkingText && (
+                <details className="mb-2" open={!msg.content}>
+                  <summary className="cursor-pointer text-xs text-purple-400 dark:text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 select-none font-medium">
+                    💭 Thinking
+                  </summary>
+                  <p className="mt-1 text-xs text-gray-400 dark:text-slate-500 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">
+                    {msg.thinkingText}
+                  </p>
+                </details>
+              )}
               {msg.content && <p className="whitespace-pre-wrap">{msg.content}</p>}
               {msg.role === 'assistant' && msg.from_general_knowledge && (
                 <p className="mt-2 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
@@ -362,18 +373,23 @@ export default function ChatWindow({ messages, loading, loadingStatus, onApprove
           </div>
         )
       })}
-      {loading && (
-        <div className="flex justify-start">
-          <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 px-4 py-3 shadow-sm">
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-3.5 h-3.5 border-2 border-gray-300 dark:border-slate-500 border-t-indigo-500 dark:border-t-indigo-400 rounded-full animate-spin flex-shrink-0" />
-              <span className="text-sm text-gray-400 dark:text-slate-400 animate-pulse">
-                {loadingStatus || 'Thinking…'}
-              </span>
+      {loading && (() => {
+        const lastMsg = messages[messages.length - 1]
+        const isAnswerStreaming = lastMsg?.role === 'assistant' && !!lastMsg?.content && !lastMsg?.timestamp
+        if (isAnswerStreaming) return null
+        return (
+          <div className="flex justify-start">
+            <div className="max-w-[75%] rounded-2xl rounded-bl-sm bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-3.5 h-3.5 border-2 border-gray-300 dark:border-slate-500 border-t-indigo-500 dark:border-t-indigo-400 rounded-full animate-spin flex-shrink-0" />
+                <span className="text-sm text-gray-400 dark:text-slate-400 animate-pulse">
+                  {loadingStatus || 'Thinking…'}
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
       <div ref={bottomRef} />
     </div>
   )

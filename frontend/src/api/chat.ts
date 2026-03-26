@@ -38,6 +38,7 @@ export interface ChatResponse {
 
 export interface ProgressEvent {
   event: 'thinking' | 'searching' | 'tool_executing' | 'generating'
+        | 'thinking_token' | 'answer_token'
   label: string
 }
 

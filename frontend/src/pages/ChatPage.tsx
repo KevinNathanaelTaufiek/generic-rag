@@ -85,7 +85,9 @@ export default function ChatPage() {
         const idx = prev.findLastIndex(m => (m as DisplayMessage & { _id?: string })._id === placeholderId)
         if (idx === -1) return [...prev, msg]
         const updated = [...prev]
-        updated[idx] = msg
+        // Preserve accumulated thinkingText from streaming
+        const existingThinkingText = (updated[idx] as DisplayMessage).thinkingText
+        updated[idx] = { ...msg, ...(existingThinkingText ? { thinkingText: existingThinkingText } : {}) }
         return updated
       })
     }
@@ -102,6 +104,29 @@ export default function ChatPage() {
         strict_mode: strictMode,
         enabled_tools: enabledTools,
       }, controller.signal, (p) => {
+        // Stream thinking tokens — append to placeholder's thinkingText
+        if (p.event === 'thinking_token') {
+          setMessagesForUser(owner, prev => {
+            const idx = prev.findLastIndex(m => (m as DisplayMessage & { _id?: string })._id === placeholderId)
+            if (idx === -1) return prev
+            const updated = [...prev]
+            updated[idx] = { ...updated[idx], thinkingText: ((updated[idx] as DisplayMessage).thinkingText ?? '') + p.label }
+            return updated
+          })
+          return
+        }
+        // Stream answer tokens — append to placeholder's content
+        if (p.event === 'answer_token') {
+          setMessagesForUser(owner, prev => {
+            const idx = prev.findLastIndex(m => (m as DisplayMessage & { _id?: string })._id === placeholderId)
+            if (idx === -1) return prev
+            const updated = [...prev]
+            updated[idx] = { ...updated[idx], content: (updated[idx].content ?? '') + p.label }
+            return updated
+          })
+          return
+        }
+        // Progress status events (Thinking…, Searching…, etc.)
         setLoadingStatus(p.label)
         const now = Date.now()
         const steps = progressStepsRef.current
