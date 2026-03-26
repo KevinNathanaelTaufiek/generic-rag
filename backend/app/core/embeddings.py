@@ -17,4 +17,13 @@ def get_embeddings() -> Embeddings:
             api_key=settings.openai_api_key,
         )
 
+    if settings.embedding_provider == "lmstudio":
+        from langchain_openai import OpenAIEmbeddings
+        return OpenAIEmbeddings(
+            model=settings.lmstudio_embedding_model,
+            api_key="lmstudio",
+            base_url=settings.lmstudio_base_url,
+            check_embedding_ctx_length=False,
+        )
+
     raise ValueError(f"Unsupported embedding provider: {settings.embedding_provider}")

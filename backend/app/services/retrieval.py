@@ -1,13 +1,15 @@
 from collections import defaultdict
 
-from app.core.vectorstore import get_vectorstore
+import chromadb
+
+from app.config import settings
 from app.schemas.knowledge import DocumentInfo
 
 
 def list_documents() -> list[DocumentInfo]:
     """Return one DocumentInfo per unique doc_id stored in ChromaDB."""
-    vectorstore = get_vectorstore()
-    collection = vectorstore._collection
+    client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
+    collection = client.get_or_create_collection(settings.collection_name)
     result = collection.get(include=["metadatas"])
 
     doc_map: dict[str, dict] = {}
@@ -37,8 +39,8 @@ def list_documents() -> list[DocumentInfo]:
 
 def delete_document(doc_id: str) -> bool:
     """Delete all chunks belonging to a doc_id. Returns False if not found."""
-    vectorstore = get_vectorstore()
-    collection = vectorstore._collection
+    client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
+    collection = client.get_or_create_collection(settings.collection_name)
     result = collection.get(where={"doc_id": doc_id}, include=[])
 
     if not result["ids"]:

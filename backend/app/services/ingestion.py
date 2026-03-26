@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime, timezone
-from typing import BinaryIO
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -43,38 +42,33 @@ def ingest_text(content: str, title: str | None = None) -> dict:
     docs = [Document(page_content=content, metadata={})]
     chunk_count = _ingest_documents(docs, doc_id, title, "text")
 
-    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count}
+    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count, "content": content}
 
 
-def ingest_pdf(file: BinaryIO, filename: str) -> dict:
-    from pypdf import PdfReader
+def extract_file(content: bytes, filename: str) -> tuple[str, str, str]:
+    """Extract (text, title, source_type) from raw file bytes without ingesting."""
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(content))
+        text = "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if not text:
+            raise ValueError("No extractable text found in PDF.")
+        return text, filename.removesuffix(".pdf"), "pdf"
+    else:
+        return content.decode("utf-8", errors="replace"), filename.rsplit(".", 1)[0], "file"
+
+
+def ingest_file(content: bytes, filename: str) -> dict:
+    """Ingest any supported file type (PDF, TXT, MD) from raw bytes."""
+    text, title, source_type = extract_file(content, filename)
 
     doc_id = str(uuid.uuid4())
-    title = filename.removesuffix(".pdf")
-
-    reader = PdfReader(file)
-    full_text = "\n\n".join(
-        page.extract_text() or "" for page in reader.pages
-    ).strip()
-
-    if not full_text:
-        raise ValueError("No extractable text found in PDF.")
-
-    docs = [Document(page_content=full_text, metadata={})]
-    chunk_count = _ingest_documents(docs, doc_id, title, "pdf")
-
-    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count}
-
-
-def ingest_text_file(content: bytes, filename: str) -> dict:
-    doc_id = str(uuid.uuid4())
-    title = filename.rsplit(".", 1)[0]
-
-    text = content.decode("utf-8", errors="replace")
     docs = [Document(page_content=text, metadata={})]
-    chunk_count = _ingest_documents(docs, doc_id, title, "file")
+    chunk_count = _ingest_documents(docs, doc_id, title, source_type)
 
-    return {"doc_id": doc_id, "title": title, "chunk_count": chunk_count}
+    return {"doc_id": doc_id, "title": title, "source_type": source_type, "chunk_count": chunk_count, "content": text}
 
 
 def reindex_all() -> int:
@@ -91,19 +85,34 @@ def reindex_all() -> int:
     if not result["documents"]:
         return 0
 
-    # Delete existing collection and recreate with new embeddings
-    client.delete_collection(settings.collection_name)
-
-    embeddings = get_embeddings()
-    new_vs = Chroma(
-        client=client,
-        collection_name=settings.collection_name,
-        embedding_function=embeddings,
-    )
-
     docs = [
         Document(page_content=text, metadata=meta)
         for text, meta in zip(result["documents"], result["metadatas"])
     ]
-    new_vs.add_documents(docs)
+
+    # Embed dulu ke collection sementara — jika gagal, collection asli tetap aman
+    tmp_name = f"{settings.collection_name}_reindex_tmp"
+    try:
+        embeddings = get_embeddings()
+        tmp_vs = Chroma(
+            client=client,
+            collection_name=tmp_name,
+            embedding_function=embeddings,
+        )
+        tmp_vs.add_documents(docs)
+    except Exception:
+        client.delete_collection(tmp_name)
+        raise
+
+    # Embedding berhasil — swap collection
+    client.delete_collection(settings.collection_name)
+    client.get_collection(tmp_name)  # verify exists
+    # Rename tidak didukung chromadb, jadi re-embed ke collection final
+    final_vs = Chroma(
+        client=client,
+        collection_name=settings.collection_name,
+        embedding_function=embeddings,
+    )
+    final_vs.add_documents(docs)
+    client.delete_collection(tmp_name)
     return len(docs)

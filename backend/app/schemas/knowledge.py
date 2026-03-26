@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from datetime import datetime
 from typing import Optional
 
 
@@ -19,6 +18,22 @@ class DocumentInfo(BaseModel):
 class DocumentListResponse(BaseModel):
     documents: list[DocumentInfo]
     total: int
+
+
+class DocumentContent(BaseModel):
+    doc_id: str
+    title: str
+    source_type: str
+    content: str
+    created_at: str
+
+
+class PreviewResponse(BaseModel):
+    title: str
+    source_type: str
+    content: str
+    estimated_chunks: int
+    char_count: int
 
 
 class ReindexResponse(BaseModel):

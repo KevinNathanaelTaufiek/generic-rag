@@ -25,8 +25,8 @@ export default function KnowledgePage() {
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Knowledge Base</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-slate-100">Knowledge Base</h1>
+        <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
           Add documents and text that the AI will use to answer your questions.
         </p>
       </div>
@@ -34,7 +34,7 @@ export default function KnowledgePage() {
       <KnowledgeUpload onAdded={handleAdded} />
 
       <div>
-        <h2 className="text-lg font-semibold text-gray-700 mb-3">
+        <h2 className="text-lg font-semibold text-gray-700 dark:text-slate-300 mb-3">
           Documents ({documents.length})
         </h2>
         <KnowledgeList

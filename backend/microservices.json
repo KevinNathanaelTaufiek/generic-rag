@@ -1,0 +1,88 @@
+[
+  {
+    "name": "send_notification",
+    "description": "Send a notification or message to a recipient.",
+    "endpoint": "http://localhost:8001/notify",
+    "method": "POST",
+    "args_schema": {
+      "type": "object",
+      "properties": {
+        "to":      { "type": "string", "description": "Recipient email or username", "x-param-style": "body" },
+        "message": { "type": "string", "description": "Notification message body", "x-param-style": "body" }
+      },
+      "required": ["to", "message"]
+    },
+    "response_schema": {
+      "type": "object",
+      "properties": {
+        "to":        { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["to", "timestamp"]
+    },
+    "args_example": { "to": "admin@example.com", "message": "Server is down!" },
+    "response_example": { "to": "admin@example.com", "timestamp": "2026-03-21T10:00:00Z" }
+  },
+  {
+    "name": "get_random_number",
+    "description": "Generate a random number between min and max (inclusive). Default range is 1 to 100.",
+    "endpoint": "http://localhost:8001/random-number",
+    "method": "POST",
+    "args_schema": {
+      "type": "object",
+      "properties": {
+        "min": { "type": "integer", "description": "Lower bound (inclusive). Default: 1", "default": 1, "x-param-style": "body" },
+        "max": { "type": "integer", "description": "Upper bound (inclusive). Default: 100", "default": 100, "x-param-style": "body" }
+      },
+      "required": []
+    },
+    "response_schema": {
+      "type": "object",
+      "properties": {
+        "min":    { "type": "integer" },
+        "max":    { "type": "integer" },
+        "number": { "type": "integer" }
+      },
+      "required": ["min", "max", "number"]
+    },
+    "args_example": { "min": 1, "max": 50 },
+    "response_example": { "min": 1, "max": 50, "number": 23 }
+  },
+  {
+    "name": "manage_task",
+    "description": "Create, update, delete, or list tasks in the task manager. Use action='create' to add a new task, 'update' to modify an existing one (requires task_id), 'delete' to remove a task (requires task_id), or 'list' to get all tasks.",
+    "endpoint": "http://localhost:8001/tasks/manage",
+    "method": "POST",
+    "args_schema": {
+      "type": "object",
+      "properties": {
+        "action":   { "type": "string",  "description": "Operation: create | update | delete | list", "x-param-style": "body" },
+        "task_id":  { "type": "string",  "description": "Task ID — required for update and delete", "x-param-style": "body" },
+        "title":    { "type": "string",  "description": "Task title — required for create, optional for update", "x-param-style": "body" },
+        "tags":     { "type": "array",   "items": { "type": "string" }, "description": "List of tags, e.g. [\"urgent\", \"backend\"]", "x-param-style": "body" },
+        "metadata": { "type": "object",  "description": "Extra info, e.g. {\"priority\": 1, \"due\": \"2026-03-30\"}", "x-param-style": "body" }
+      },
+      "required": ["action"]
+    },
+    "response_schema": {
+      "type": "object",
+      "properties": {
+        "success": { "type": "boolean" },
+        "action":  { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "required": ["success", "action", "message"]
+    },
+    "args_example": {
+      "action": "create",
+      "title": "Fix login bug",
+      "tags": ["urgent", "backend"],
+      "metadata": { "priority": 1, "due": "2026-03-30" }
+    },
+    "response_example": {
+      "success": true,
+      "action": "create",
+      "message": "Task 'Fix login bug' created with ID abc12345."
+    }
+  }
+]

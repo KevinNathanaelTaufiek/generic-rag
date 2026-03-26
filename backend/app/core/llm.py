@@ -15,6 +15,7 @@ def get_llm() -> BaseChatModel:
         return ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=settings.google_api_key,
+            include_thoughts=True,  # expose thinking tokens during streaming
         )
 
     raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

@@ -1,5 +1,10 @@
-# Claude context (personal, tidak perlu di-track)
-.claude/
+# Claude context
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
 
 # OS
 .DS_Store
