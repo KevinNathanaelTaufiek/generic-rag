@@ -305,7 +305,8 @@ async def agent_node(state: AgentState) -> AgentState:
             sources = sources + _extract_sources_from_web_result(result_str)
 
         # Build running message history for multi-tool loop
-        accumulated_messages = list(state["messages"]) + [response, tool_message]
+        # Use local `messages` (not state["messages"]) — it has the correctly built system prompt
+        accumulated_messages = messages + [response, tool_message]
         accumulated_new = [response, tool_message]
 
         # Loop: allow LLM to call additional tools (e.g. search_web after search_knowledge)

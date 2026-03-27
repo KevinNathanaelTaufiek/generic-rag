@@ -88,13 +88,22 @@ function formatDuration(ms: number): string {
 function AgentStepsLog({ steps }: { steps: AgentStep[] }) {
   const progressSteps = steps.filter(s => s.status === 'progress')
   const toolSteps = steps.filter(s => s.status !== 'progress')
+  const detailsRef = useRef<HTMLDetailsElement>(null)
 
   if (!steps.length) return null
 
   const hasActiveStep = progressSteps.some(s => s.durationMs === undefined)
 
+  // Imperatively open when active — avoids React-controlled `open` prop
+  // fighting with browser's native <details> toggle during streaming re-renders
+  useEffect(() => {
+    if (hasActiveStep && detailsRef.current) {
+      detailsRef.current.open = true
+    }
+  }, [hasActiveStep])
+
   return (
-    <details className="mb-3" open={hasActiveStep}>
+    <details ref={detailsRef} className="mb-3">
       <summary className="cursor-pointer text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 select-none font-medium">
         {steps.length} step{steps.length > 1 ? 's' : ''}
       </summary>
@@ -289,7 +298,7 @@ export default function ChatWindow({ messages, loading, loadingStatus, onApprove
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    bottomRef.current?.scrollIntoView({ behavior: 'instant' })
   }, [messages, loading])
 
   if (!messages.length && !loading) {

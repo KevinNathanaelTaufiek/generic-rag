@@ -10,6 +10,14 @@ uvicorn app.main:app --reload
 
 Pastikan `.env` sudah di-setup (lihat `.env.example`). Virtual env aktif sebelum run.
 
+## Menjalankan Dummy Service
+
+```bash
+cd dummy_services
+uvicorn main:app --port 8001 --reload
+# → http://localhost:8001/ui
+```
+
 ## Menjalankan Frontend
 
 ```bash
